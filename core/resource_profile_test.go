@@ -89,7 +89,7 @@ func TestResourceProfile_20Nodes(t *testing.T) {
 		StatsUserUplink:   true,
 		StatsUserDownlink: true,
 		Handshake:         proto.Uint32(4),
-		ConnectionIdle:    proto.Uint32(120),
+		ConnectionIdle:    proto.Uint32(300),
 		UplinkOnly:        proto.Uint32(2),
 		DownlinkOnly:      proto.Uint32(4),
 		BufferSize:        proto.Int32(128),

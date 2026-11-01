@@ -18,7 +18,8 @@ func buildDefaultOutbound() (*core.OutboundHandlerConfig, error) {
 	//outboundDetourConfig.SendThrough = &sendthrough
 
 	proxySetting := &conf.FreedomConfig{
-		DomainStrategy: "UseIPv4v6",
+		// Prefer IPv4 to match common game clients (ipv6:false) and sing-box-yg prefer_ipv4.
+		DomainStrategy: "UseIPv4",
 	}
 	var setting json.RawMessage
 	setting, err := json.Marshal(proxySetting)

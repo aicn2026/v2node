@@ -2,7 +2,6 @@ package core
 
 import (
 	"encoding/json"
-	"net"
 	"strings"
 
 	panel "github.com/wyx2685/v2node/api/v2board"
@@ -12,26 +11,6 @@ import (
 	"github.com/xtls/xray-core/core"
 	coreConf "github.com/xtls/xray-core/infra/conf"
 )
-
-// hasPublicIPv6 checks if the machine has a public IPv6 address
-func hasPublicIPv6() bool {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return false
-	}
-	for _, addr := range addrs {
-		ipNet, ok := addr.(*net.IPNet)
-		if !ok {
-			continue
-		}
-		ip := ipNet.IP
-		// Check if it's IPv6, not loopback, not link-local, not private/ULA
-		if ip.To4() == nil && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsPrivate() {
-			return true
-		}
-	}
-	return false
-}
 
 func hasOutboundWithTag(list []*core.OutboundHandlerConfig, tag string) bool {
 	for _, o := range list {
@@ -43,11 +22,7 @@ func hasOutboundWithTag(list []*core.OutboundHandlerConfig, tag string) bool {
 }
 
 func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHandlerConfig, *router.Config, error) {
-	//dns
-	queryStrategy := "UseIPv4v6"
-	if !hasPublicIPv6() {
-		queryStrategy = "UseIPv4"
-	}
+	// Prefer IPv4 so post-proxy DNS does not split game sessions across A/AAAA.
 	coreDnsConfig := &coreConf.DNSConfig{
 		Servers: []*coreConf.NameServerConfig{
 			{
@@ -56,7 +31,7 @@ func GetCustomConfig(infos []*panel.NodeInfo) (*dns.Config, []*core.OutboundHand
 				},
 			},
 		},
-		QueryStrategy: queryStrategy,
+		QueryStrategy: "UseIPv4",
 	}
 	//outbound
 	defaultoutbound, _ := buildDefaultOutbound()

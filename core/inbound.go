@@ -117,10 +117,15 @@ func buildInbound(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerCon
 	// Set Listen IP address
 	ipAddress := net.ParseAddress(nodeInfo.Common.ListenIP)
 	in.ListenOn = &coreConf.Address{Address: ipAddress}
-	// Set SniffingConfig
+	// Set SniffingConfig.
+	// RouteOnly=true: use sniffed domains for routing only; keep the client-
+	// requested destination IP. Overwriting the target (routeOnly=false) makes
+	// the freedom outbound re-resolve SNI via local DNS, which breaks games
+	// that connect by fixed IP / fake-ip (e.g. Lineage login sessions).
 	sniffingConfig := &coreConf.SniffingConfig{
 		Enabled:      true,
 		DestOverride: coreConf.StringList{"http", "tls", "quic"},
+		RouteOnly:    true,
 	}
 	in.SniffingConfig = sniffingConfig
 
@@ -471,8 +476,13 @@ func buildHysteria2(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourCon
 func buildTuic(nodeInfo *panel.NodeInfo, inbound *coreConf.InboundDetourConfig) error {
 	inbound.Protocol = "tuic"
 	s := nodeInfo.Common
+	congestion := s.CongestionControl
+	if congestion == "" {
+		// Align with sing-box-yg / mini-panel defaults used by game clients.
+		congestion = "bbr"
+	}
 	settings := &coreConf.TuicServerConfig{
-		CongestionControl: s.CongestionControl,
+		CongestionControl: congestion,
 		ZeroRttHandshake:  s.ZeroRTTHandshake,
 	}
 	t := coreConf.TransportProtocol("tuic")
