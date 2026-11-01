@@ -17,16 +17,19 @@ func buildDefaultOutbound() (*core.OutboundHandlerConfig, error) {
 	//sendthrough := "origin"
 	//outboundDetourConfig.SendThrough = &sendthrough
 
-	proxySetting := &conf.FreedomConfig{
-		// Prefer IPv4 to match common game clients (ipv6:false) and sing-box-yg prefer_ipv4.
-		DomainStrategy: "UseIPv4",
-	}
+	// Prefer IPv4 via sockopt (not the deprecated freedom.domainStrategy field).
+	proxySetting := &conf.FreedomConfig{}
 	var setting json.RawMessage
 	setting, err := json.Marshal(proxySetting)
 	if err != nil {
 		return nil, fmt.Errorf("marshal proxy config error: %s", err)
 	}
 	outboundDetourConfig.Settings = &setting
+	outboundDetourConfig.StreamSetting = &conf.StreamConfig{
+		SocketSettings: &conf.SocketConfig{
+			DomainStrategy: "UseIPv4",
+		},
+	}
 	return outboundDetourConfig.Build()
 }
 
