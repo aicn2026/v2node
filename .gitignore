@@ -18,4 +18,6 @@ new.sh
 quick_update.sh
 v2node-linux-amd64
 v2node-linux-amd64.zip
+v2node-linux-64.zip
+release_stage/
 *.exe

@@ -97,24 +97,19 @@ func (e *Engine) AddUsers(tag string, users []panel.UserInfo, info *panel.NodeIn
 	if info != nil {
 		st.info = info
 	}
-	// merge users by uuid
-	byUUID := map[string]panel.UserInfo{}
-	for _, u := range st.users {
-		byUUID[u.Uuid] = u
-	}
 	for _, u := range users {
-		byUUID[u.Uuid] = u
 		e.uidLock.Lock()
 		e.uidMap[format.UserTag(tag, u.Uuid)] = u.Id
 		e.uidLock.Unlock()
 	}
-	merged := make([]panel.UserInfo, 0, len(byUUID))
-	for _, u := range byUUID {
-		merged = append(merged, u)
-	}
-	st.users = merged
-	if err := e.rebuildLocked(); err != nil {
-		return 0, err
+	st.users = mergeUsers(st.users, users)
+
+	// Prefer hot UpdateUsers (no listener restart). Fall back to rebuild if inbound missing.
+	if err := e.hotUpdateUsers(tag, st); err != nil {
+		log.WithField("err", err).WithField("tag", tag).Debug("hot AddUsers fallback to rebuild")
+		if err := e.rebuildLocked(); err != nil {
+			return 0, err
+		}
 	}
 	return len(users), nil
 }
@@ -135,6 +130,7 @@ func (e *Engine) DelUsers(users []panel.UserInfo, tag string) error {
 		delete(e.uidMap, email)
 		e.uidLock.Unlock()
 		e.traffic.Delete(email)
+		e.tracker.closeUser(email) // kick live sessions like Xray LinkManager.CloseAll
 	}
 	kept := st.users[:0]
 	for _, u := range st.users {
@@ -143,7 +139,12 @@ func (e *Engine) DelUsers(users []panel.UserInfo, tag string) error {
 		}
 	}
 	st.users = kept
-	return e.rebuildLocked()
+
+	if err := e.hotUpdateUsers(tag, st); err != nil {
+		log.WithField("err", err).WithField("tag", tag).Debug("hot DelUsers fallback to rebuild")
+		return e.rebuildLocked()
+	}
+	return nil
 }
 
 func (e *Engine) GetUserTrafficSlice(tag string, minTraffic int) ([]panel.UserTraffic, error) {

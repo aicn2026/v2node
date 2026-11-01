@@ -77,27 +77,35 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	if err != nil {
 		return nil, err
 	}
+	inbound.server = service
+	if err = inbound.UpdateUsers(options.Users); err != nil {
+		return nil, err
+	}
+	return inbound, nil
+}
+
+// UpdateUsers hot-reloads TUIC users without restarting the listener.
+func (h *Inbound) UpdateUsers(users []option.TUICUser) error {
 	var userList []int
 	var userNameList []string
 	var userUUIDList [][16]byte
 	var userPasswordList []string
-	for index, user := range options.Users {
+	for index, user := range users {
 		if user.UUID == "" {
-			return nil, E.New("missing uuid for user ", index)
+			return E.New("missing uuid for user ", index)
 		}
 		userUUID, err := uuid.FromString(user.UUID)
 		if err != nil {
-			return nil, E.Cause(err, "invalid uuid for user ", index)
+			return E.Cause(err, "invalid uuid for user ", index)
 		}
 		userList = append(userList, index)
 		userNameList = append(userNameList, user.Name)
 		userUUIDList = append(userUUIDList, userUUID)
 		userPasswordList = append(userPasswordList, user.Password)
 	}
-	service.UpdateUsers(userList, userUUIDList, userPasswordList)
-	inbound.server = service
-	inbound.userNameList = userNameList
-	return inbound, nil
+	h.server.UpdateUsers(userList, userUUIDList, userPasswordList)
+	h.userNameList = userNameList
+	return nil
 }
 
 func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {

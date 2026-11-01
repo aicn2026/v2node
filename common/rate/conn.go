@@ -28,6 +28,33 @@ func (c *Conn) Write(b []byte) (n int, err error) {
 	return c.Conn.Write(b)
 }
 
+// NewDynamicConnRateLimiter wraps conn with a hot-swappable DynamicBucket (panel speed limit).
+func NewDynamicConnRateLimiter(c net.Conn, l *DynamicBucket) net.Conn {
+	if l == nil {
+		return c
+	}
+	return &DynamicConn{Conn: c, limiter: l}
+}
+
+type DynamicConn struct {
+	net.Conn
+	limiter *DynamicBucket
+}
+
+func (c *DynamicConn) Read(b []byte) (n int, err error) {
+	if bkt := c.limiter.Get(); bkt != nil {
+		bkt.Wait(int64(len(b)))
+	}
+	return c.Conn.Read(b)
+}
+
+func (c *DynamicConn) Write(b []byte) (n int, err error) {
+	if bkt := c.limiter.Get(); bkt != nil {
+		bkt.Wait(int64(len(b)))
+	}
+	return c.Conn.Write(b)
+}
+
 /*
 type PacketConnCounter struct {
 	network.PacketConn

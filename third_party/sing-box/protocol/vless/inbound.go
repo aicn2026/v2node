@@ -59,14 +59,8 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		return nil, err
 	}
 	service := vless.NewService[int](logger, adapter.NewUpstreamContextHandlerEx(inbound.newConnectionEx, inbound.newPacketConnectionEx))
-	service.UpdateUsers(common.MapIndexed(inbound.users, func(index int, _ option.VLESSUser) int {
-		return index
-	}), common.Map(inbound.users, func(it option.VLESSUser) string {
-		return it.UUID
-	}), common.Map(inbound.users, func(it option.VLESSUser) string {
-		return it.Flow
-	}))
 	inbound.service = service
+	inbound.UpdateUsers(options.Users)
 	if options.TLS != nil {
 		inbound.tlsConfig, err = tls.NewServer(ctx, logger, common.PtrValueOrDefault(options.TLS))
 		if err != nil {
@@ -87,6 +81,18 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 		ConnectionHandler: inbound,
 	})
 	return inbound, nil
+}
+
+// UpdateUsers hot-reloads VLESS users without restarting the listener.
+func (h *Inbound) UpdateUsers(users []option.VLESSUser) {
+	h.users = users
+	h.service.UpdateUsers(common.MapIndexed(users, func(index int, _ option.VLESSUser) int {
+		return index
+	}), common.Map(users, func(it option.VLESSUser) string {
+		return it.UUID
+	}), common.Map(users, func(it option.VLESSUser) string {
+		return it.Flow
+	}))
 }
 
 func (h *Inbound) Start(stage adapter.StartStage) error {
