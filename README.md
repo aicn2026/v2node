@@ -14,7 +14,8 @@ wget -N https://raw.githubusercontent.com/wyx2685/v2node/master/script/install.s
 
 ## 构建
 ``` bash
-GOEXPERIMENT=jsonv2 go build -v -o build_assets/v2node -trimpath -ldflags "-X 'github.com/wyx2685/v2node/cmd.version=$version' -s -w -buildid="
+# Linux 节点二进制（Reality 需要 with_utls，TUIC 需要 with_quic）
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags "with_quic,with_utls" -trimpath -ldflags "-s -w -buildid=" -o v2node-linux-amd64 .
 ```
 
 ## Stars 增长记录

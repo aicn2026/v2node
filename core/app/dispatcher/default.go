@@ -1,3 +1,5 @@
+//go:build ignore
+
 package dispatcher
 
 //go:generate go run github.com/xtls/xray-core/common/errors/errorgen
@@ -207,7 +209,9 @@ func (d *DefaultDispatcher) getLink(ctx context.Context) (*transport.Link, *tran
 		lm.AddLink(managedWriter, outboundLink.Reader)
 		inboundLink.Writer = managedWriter
 		if w != nil {
-			sessionInbound.CanSpliceCopy = 3
+			// Do not force CanSpliceCopy=3. That disables XTLS Vision splice and
+			// has been observed to break Lineage raw-TCP (7777/13001) with error 27.
+			// Keep rate limiting on the pipe path only.
 			inboundLink.Writer = rate.NewRateLimitWriter(inboundLink.Writer, w)
 			outboundLink.Writer = rate.NewRateLimitWriter(outboundLink.Writer, w)
 		}
@@ -388,7 +392,7 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 		}
 		outbound.Writer = managedWriter
 		if w != nil {
-			sessionInbound.CanSpliceCopy = 3
+			// Same as getLink: never override Vision's CanSpliceCopy for rate limit.
 			outbound.Writer = rate.NewRateLimitWriter(outbound.Writer, w)
 		}
 		var t *counter.TrafficCounter
@@ -401,8 +405,16 @@ func (d *DefaultDispatcher) DispatchLink(ctx context.Context, destination net.De
 
 		ts := t.GetCounter(user.Email)
 		downcounter := &counter.XrayTrafficCounter{V: &ts.DownCounter}
+		// Prefer the real TimeoutReader (pipe) so Vision/splice deadlines are
+		// not replaced by TimeoutWrapperReader's goroutine timer.
+		var timeoutReader buf.TimeoutReader
+		if tr, ok := outbound.Reader.(buf.TimeoutReader); ok {
+			timeoutReader = tr
+		} else {
+			timeoutReader = &buf.TimeoutWrapperReader{Reader: outbound.Reader}
+		}
 		outbound.Reader = &CounterReader{
-			Reader:  &buf.TimeoutWrapperReader{Reader: outbound.Reader},
+			Reader:  timeoutReader,
 			Counter: &ts.UpCounter,
 		}
 		lm.AddLink(managedWriter, outbound.Reader)

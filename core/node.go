@@ -7,21 +7,15 @@ import (
 )
 
 func (v *V2Core) AddNode(tag string, info *panel.NodeInfo) error {
-	inBoundConfig, err := buildInbound(info, tag)
-	if err != nil {
-		return fmt.Errorf("build inbound error: %s", err)
-	}
-	err = v.addInbound(inBoundConfig)
-	if err != nil {
-		return fmt.Errorf("add inbound error: %s", err)
+	if err := v.engine.AddNode(tag, info); err != nil {
+		return fmt.Errorf("add node error: %s", err)
 	}
 	return nil
 }
 
 func (v *V2Core) DelNode(tag string) error {
-	err := v.removeInbound(tag)
-	if err != nil {
-		return fmt.Errorf("remove in error: %s", err)
+	if err := v.engine.DelNode(tag); err != nil {
+		return fmt.Errorf("del node error: %s", err)
 	}
 	return nil
 }

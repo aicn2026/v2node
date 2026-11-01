@@ -1,3 +1,5 @@
+//go:build ignore
+
 package core
 
 import (
@@ -117,15 +119,14 @@ func buildInbound(nodeInfo *panel.NodeInfo, tag string) (*core.InboundHandlerCon
 	// Set Listen IP address
 	ipAddress := net.ParseAddress(nodeInfo.Common.ListenIP)
 	in.ListenOn = &coreConf.Address{Address: ipAddress}
-	// Set SniffingConfig.
-	// RouteOnly=true: use sniffed domains for routing only; keep the client-
-	// requested destination IP. Overwriting the target (routeOnly=false) makes
-	// the freedom outbound re-resolve SNI via local DNS, which breaks games
-	// that connect by fixed IP / fake-ip (e.g. Lineage login sessions).
+	// Disable payload sniffing on exit nodes.
+	// Sniffing buffers the first client bytes before dialing the target; with
+	// Vision padding / multi-conn game logins (Lineage 2 �?api.g.nc.com) that
+	// delay diverges from sing-box and surfaces as NC Soft error 27. Routing
+	// here is inboundTag �?freedom (AsIs), so SNI override is unused.
+	// Keep the object so hot-reload / stats paths still see a defined config.
 	sniffingConfig := &coreConf.SniffingConfig{
-		Enabled:      true,
-		DestOverride: coreConf.StringList{"http", "tls", "quic"},
-		RouteOnly:    true,
+		Enabled: false,
 	}
 	in.SniffingConfig = sniffingConfig
 

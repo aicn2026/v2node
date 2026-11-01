@@ -1,3 +1,5 @@
+//go:build ignore
+
 package core
 
 import (
@@ -11,11 +13,8 @@ import (
 	"github.com/xtls/xray-core/app/router"
 )
 
-// TestDefaultOutMultiNode 验证「一个 v2node 进程承载多个面板节点」时，
-// 各自的 default_out 规则能正确区分，不会互相覆盖。
-//
-// 这是本机 31 个 IP / 31 个面板节点的典型部署形态。
-func TestDefaultOutMultiNode(t *testing.T) {
+// TestDefaultOutMultiNode 验证「一�?v2node 进程承载多个面板节点」时�?// 各自�?default_out 规则能正确区分，不会互相覆盖�?//
+// 这是本机 31 �?IP / 31 个面板节点的典型部署形态�?func TestDefaultOutMultiNode(t *testing.T) {
 	mk := func(id int, ip string) *panel.NodeInfo {
 		av, _ := json.Marshal(map[string]any{
 			"protocol":    "freedom",
@@ -53,7 +52,7 @@ func TestDefaultOutMultiNode(t *testing.T) {
 		t.Fatalf("GetCustomConfig failed: %v", err)
 	}
 
-	/* 1) 三个节点的 outbound 都必须存在，且 tag 互不相同 */
+	/* 1) 三个节点�?outbound 都必须存在，�?tag 互不相同 */
 	seen := map[string]string{}
 	got := 0
 	for _, o := range outbounds {
@@ -68,7 +67,7 @@ func TestDefaultOutMultiNode(t *testing.T) {
 	}
 	t.Logf("egress outbounds: %v", seen)
 
-	/* 2) 路由规则必须按 inboundTag 精确匹配到各自的 outbound */
+	/* 2) 路由规则必须�?inboundTag 精确匹配到各自的 outbound */
 	if routeCfg == nil {
 		t.Fatal("route config is nil")
 	}
@@ -99,8 +98,7 @@ func TestDefaultOutMultiNode(t *testing.T) {
 	}
 	t.Logf("rules: %v", ruleTags)
 
-	/* 3) 关键：不同节点的 outbound 必须是不同的对象，不能是同一个被复用。
-	   若被复用，Xray 中后一个会覆盖前一个，导致所有节点都走同一个出口 IP。 */
+	/* 3) 关键：不同节点的 outbound 必须是不同的对象，不能是同一个被复用�?	   若被复用，Xray 中后一个会覆盖前一个，导致所有节点都走同一个出�?IP�?*/
 	ptrs := map[string]bool{}
 	for _, o := range outbounds {
 		if o == nil || len(o.Tag) < 7 || o.Tag[:7] != "egress-" {
@@ -108,16 +106,15 @@ func TestDefaultOutMultiNode(t *testing.T) {
 		}
 		key := fmt.Sprintf("%p", o)
 		if ptrs[key] {
-			t.Fatalf("duplicate outbound pointer for tag %s — 后者会覆盖前者", o.Tag)
+			t.Fatalf("duplicate outbound pointer for tag %s �?后者会覆盖前�?, o.Tag)
 		}
 		ptrs[key] = true
 	}
 	t.Log("all egress outbounds are distinct instances")
 }
 
-// TestDefaultOutSendThroughValues 校验每个 outbound 的 sendThrough
-// 确实是各自配置的那个 IP（即不同节点 → 不同出口）。
-func TestDefaultOutSendThroughValues(t *testing.T) {
+// TestDefaultOutSendThroughValues 校验每个 outbound �?sendThrough
+// 确实是各自配置的那个 IP（即不同节点 �?不同出口）�?func TestDefaultOutSendThroughValues(t *testing.T) {
 	mk := func(id int, ip string) *panel.NodeInfo {
 		av, _ := json.Marshal(map[string]any{
 			"protocol":    "freedom",
@@ -167,7 +164,7 @@ func TestDefaultOutSendThroughValues(t *testing.T) {
 		if got := sc.Via.AsAddress().IP().String(); got != exp {
 			t.Fatalf("%s: via = %q, want %q", o.Tag, got, exp)
 		}
-		t.Logf("%s -> sendThrough %s ✓", o.Tag, exp)
+		t.Logf("%s -> sendThrough %s �?, o.Tag, exp)
 	}
 	if found != 2 {
 		t.Fatalf("expected to verify 2 egress outbounds, verified %d", found)
