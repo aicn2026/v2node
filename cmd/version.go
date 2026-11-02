@@ -3,6 +3,7 @@ package cmd
 import (
 	"fmt"
 
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/spf13/cobra"
 )
 
@@ -25,5 +26,6 @@ func init() {
 }
 
 func showVersion() {
-	fmt.Printf("%s %s (%s) \n", codename, version, intro)
+	fmt.Printf("%s %s (%s)\n", codename, version, intro)
+	fmt.Printf("sing-box %s started\n", C.Version)
 }

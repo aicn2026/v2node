@@ -122,13 +122,13 @@ jobs:
           echo "version: $version"
           mkdir -p build_assets
           # with_utls required for Reality; with_quic required for TUIC
-          go build -tags "with_quic,with_utls" -v -o build_assets/v2node -trimpath -ldflags "-X 'github.com/wyx2685/v2node/cmd.version=$version' -s -w -buildid="
+          go build -tags "with_quic,with_utls" -v -o build_assets/v2node -trimpath -ldflags "-X 'github.com/wyx2685/v2node/cmd.version=$version' -X 'github.com/sagernet/sing-box/constant.Version=1.12.12' -s -w -buildid="
 
       - name: Build Mips softfloat v2node
         if: matrix.goarch == 'mips' || matrix.goarch == 'mipsle'
         run: |
           echo "version: $version"
-          GOMIPS=softfloat go build -tags "with_quic,with_utls" -v -o build_assets/v2node_softfloat -trimpath -ldflags "-X 'github.com/wyx2685/v2node/cmd.version=$version' -s -w -buildid="
+          GOMIPS=softfloat go build -tags "with_quic,with_utls" -v -o build_assets/v2node_softfloat -trimpath -ldflags "-X 'github.com/wyx2685/v2node/cmd.version=$version' -X 'github.com/sagernet/sing-box/constant.Version=1.12.12' -s -w -buildid="
       - name: Rename Windows v2node
         if: matrix.goos == 'windows'
         run: |

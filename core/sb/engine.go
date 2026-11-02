@@ -8,6 +8,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	box "github.com/sagernet/sing-box"
+	sbconst "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	panel "github.com/wyx2685/v2node/api/v2board"
 	"github.com/wyx2685/v2node/common/counter"
@@ -215,6 +216,6 @@ func (e *Engine) rebuildLocked() error {
 		return fmt.Errorf("start sing-box: %w", err)
 	}
 	e.instance = instance
-	log.Infof("sing-box dataplane ready: %d inbound(s)", len(opts.Inbounds))
+	log.Infof("sing-box %s dataplane ready: %d inbound(s)", sbconst.Version, len(opts.Inbounds))
 	return nil
 }

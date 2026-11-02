@@ -79,7 +79,7 @@ func (m *ConnectionManager) NewConnection(ctx context.Context, this N.Dialer, co
 		}
 		err = E.Cause(err, "open connection to ", remoteString, dialerString)
 		N.CloseOnHandshakeFailure(conn, onClose, err)
-		m.logger.ErrorContext(ctx, err)
+		logOutboundError(m.logger, ctx, err)
 		return
 	}
 	err = N.ReportConnHandshakeSuccess(conn, remoteConn)
@@ -144,7 +144,7 @@ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dial
 			}
 			err = E.Cause(err, "open packet connection to ", remoteString, dialerString)
 			N.CloseOnHandshakeFailure(conn, onClose, err)
-			m.logger.ErrorContext(ctx, err)
+			logOutboundError(m.logger, ctx, err)
 			return
 		}
 		remotePacketConn = bufio.NewUnbindPacketConn(remoteConn)
@@ -165,7 +165,7 @@ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dial
 			}
 			err = E.Cause(err, "listen packet connection using ", dialerString)
 			N.CloseOnHandshakeFailure(conn, onClose, err)
-			m.logger.ErrorContext(ctx, err)
+			logOutboundError(m.logger, ctx, err)
 			return
 		}
 	}
@@ -356,4 +356,38 @@ func (m *ConnectionManager) packetConnectionCopy(ctx context.Context, source N.P
 		onClose(err)
 	}
 	common.Close(source, destination)
+}
+
+// Outbound dial/DNS failures from user traffic are common noise (dead peers,
+// intranet names, timeouts). Keep them at debug so journal stays quiet at
+// default warning/error levels — similar to Xray Access: none.
+func logOutboundError(logger logger.ContextLogger, ctx context.Context, err error) {
+	if isBenignOutboundError(err) {
+		logger.DebugContext(ctx, err)
+		return
+	}
+	logger.ErrorContext(ctx, err)
+}
+
+func isBenignOutboundError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "i/o timeout"),
+		strings.Contains(msg, "NXDOMAIN"),
+		strings.Contains(msg, "no such host"),
+		strings.Contains(msg, "server misbehaving"),
+		strings.Contains(msg, "connection refused"),
+		strings.Contains(msg, "network is unreachable"),
+		strings.Contains(msg, "no route to host"),
+		strings.Contains(msg, "connection reset by peer"),
+		strings.Contains(msg, "broken pipe"),
+		strings.Contains(msg, "network is down"),
+		strings.Contains(msg, "host is down"):
+		return true
+	default:
+		return false
+	}
 }
