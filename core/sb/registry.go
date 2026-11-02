@@ -13,6 +13,7 @@ import (
 	"github.com/sagernet/sing-box/dns/transport/local"
 	"github.com/sagernet/sing-box/protocol/block"
 	"github.com/sagernet/sing-box/protocol/direct"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/vless"
 )
 
@@ -26,6 +27,7 @@ func inboundRegistry() *inbound.Registry {
 	registry := inbound.NewRegistry()
 	direct.RegisterInbound(registry)
 	vless.RegisterInbound(registry)
+	shadowsocks.RegisterInbound(registry)
 	registerQUICInbounds(registry)
 	return registry
 }
@@ -35,6 +37,7 @@ func outboundRegistry() *outbound.Registry {
 	direct.RegisterOutbound(registry)
 	block.RegisterOutbound(registry)
 	vless.RegisterOutbound(registry)
+	shadowsocks.RegisterOutbound(registry)
 	registerQUICOutbounds(registry)
 	return registry
 }

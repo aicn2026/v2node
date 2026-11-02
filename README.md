@@ -1,6 +1,7 @@
 ﻿# v2node
-A v2board backend based on modified sing-box dataplane (panel API unchanged).
-一个基于 sing-box 数据面的 V2board 节点服务端（面板对接不变）。
+A V2board backend based on embedded sing-box (panel API unchanged).
+一个基于嵌入式 sing-box 数据面的 V2board 节点服务端（面板对接不变）。
+支持协议：VLESS Reality、TUIC、Hysteria2、Shadowsocks。
 
 **注意： 本项目需要搭配[修改版V2board](https://github.com/wyx2685/v2board)**
 

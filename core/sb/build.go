@@ -1,6 +1,7 @@
 package sb
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -52,8 +53,59 @@ func (e *Engine) buildOptions() (option.Options, error) {
 			outTag = "direct"
 		}
 		if outTag != "direct" && !seenOut[outTag] {
-			// outbound created in applyDefaultOutTags via e.extraOutbounds
 			seenOut[outTag] = true
+		}
+
+		// Block rules MUST come before the catch-all inbound→outbound route
+		// (sing-box uses first-match-wins).
+		if st.info.Common != nil {
+			for _, route := range st.info.Common.Routes {
+				switch route.Action {
+				case "block":
+					if len(route.Match) == 0 {
+						continue
+					}
+					rules = append(rules, option.Rule{
+						Type: C.RuleTypeDefault,
+						DefaultOptions: option.DefaultRule{
+							RawDefaultRule: option.RawDefaultRule{
+								Inbound: badoption.Listable[string]{tag},
+								Domain:  badoption.Listable[string](route.Match),
+							},
+							RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
+						},
+					})
+				case "block_ip":
+					if len(route.Match) == 0 {
+						continue
+					}
+					rules = append(rules, option.Rule{
+						Type: C.RuleTypeDefault,
+						DefaultOptions: option.DefaultRule{
+							RawDefaultRule: option.RawDefaultRule{
+								Inbound: badoption.Listable[string]{tag},
+								IPCIDR:  badoption.Listable[string](route.Match),
+							},
+							RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
+						},
+					})
+				case "block_port":
+					ports := parsePorts(strings.Join(route.Match, ","))
+					if len(ports) == 0 {
+						continue
+					}
+					rules = append(rules, option.Rule{
+						Type: C.RuleTypeDefault,
+						DefaultOptions: option.DefaultRule{
+							RawDefaultRule: option.RawDefaultRule{
+								Inbound: badoption.Listable[string]{tag},
+								Port:    badoption.Listable[uint16](ports),
+							},
+							RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
+						},
+					})
+				}
+			}
 		}
 
 		rules = append(rules, option.Rule{
@@ -70,54 +122,6 @@ func (e *Engine) buildOptions() (option.Options, error) {
 				},
 			},
 		})
-
-		for _, route := range st.info.Common.Routes {
-			switch route.Action {
-			case "block":
-				if len(route.Match) == 0 {
-					continue
-				}
-				rules = append(rules, option.Rule{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: option.DefaultRule{
-						RawDefaultRule: option.RawDefaultRule{
-							Inbound: badoption.Listable[string]{tag},
-							Domain:  badoption.Listable[string](route.Match),
-						},
-						RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
-					},
-				})
-			case "block_ip":
-				if len(route.Match) == 0 {
-					continue
-				}
-				rules = append(rules, option.Rule{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: option.DefaultRule{
-						RawDefaultRule: option.RawDefaultRule{
-							Inbound: badoption.Listable[string]{tag},
-							IPCIDR:  badoption.Listable[string](route.Match),
-						},
-						RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
-					},
-				})
-			case "block_port":
-				ports := parsePorts(strings.Join(route.Match, ","))
-				if len(ports) == 0 {
-					continue
-				}
-				rules = append(rules, option.Rule{
-					Type: C.RuleTypeDefault,
-					DefaultOptions: option.DefaultRule{
-						RawDefaultRule: option.RawDefaultRule{
-							Inbound: badoption.Listable[string]{tag},
-							Port:    badoption.Listable[uint16](ports),
-						},
-						RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
-					},
-				})
-			}
-		}
 		return true
 	})
 	if buildErr != nil {
@@ -147,7 +151,7 @@ func (e *Engine) logLevel() string {
 }
 
 // applyDefaultOutTags parses panel default_out (Xray freedom JSON) into sing-box
-// direct outbounds with inet4/6_bind_address and sets each node's outTag.
+// direct outbounds with inet4/6_bind_address — same multi-IP egress semantics as Xray.
 func (e *Engine) applyDefaultOutTags() {
 	e.extraOutbounds = nil
 	seen := map[string]bool{}
@@ -163,8 +167,16 @@ func (e *Engine) applyDefaultOutTags() {
 				continue
 			}
 			var xf struct {
-				Tag         string `json:"tag"`
-				SendThrough string `json:"sendThrough"`
+				Tag            string `json:"tag"`
+				SendThrough    string `json:"sendThrough"`
+				StreamSettings *struct {
+					Sockopt *struct {
+						DomainStrategy string `json:"domainStrategy"`
+					} `json:"sockopt"`
+				} `json:"streamSettings"`
+				Settings *struct {
+					DomainStrategy string `json:"domainStrategy"`
+				} `json:"settings"`
 			}
 			if err := json.Unmarshal([]byte(*route.ActionValue), &xf); err != nil {
 				continue
@@ -189,6 +201,16 @@ func (e *Engine) applyDefaultOutTags() {
 					}
 				}
 			}
+			ds := ""
+			if xf.StreamSettings != nil && xf.StreamSettings.Sockopt != nil {
+				ds = xf.StreamSettings.Sockopt.DomainStrategy
+			}
+			if ds == "" && xf.Settings != nil {
+				ds = xf.Settings.DomainStrategy
+			}
+			if mapped := mapDomainStrategy(ds); mapped != 0 {
+				dopts.DomainStrategy = mapped
+			}
 			e.extraOutbounds = append(e.extraOutbounds, option.Outbound{
 				Type:    C.TypeDirect,
 				Tag:     outTag,
@@ -199,14 +221,35 @@ func (e *Engine) applyDefaultOutTags() {
 	})
 }
 
+func mapDomainStrategy(s string) option.DomainStrategy {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "useip", "asis", "":
+		return 0
+	case "useipv4", "ipv4_only", "ipv4only":
+		return option.DomainStrategy(C.DomainStrategyIPv4Only)
+	case "useipv6", "ipv6_only", "ipv6only":
+		return option.DomainStrategy(C.DomainStrategyIPv6Only)
+	case "useipv4v6", "prefer_ipv4", "preferipv4":
+		return option.DomainStrategy(C.DomainStrategyPreferIPv4)
+	case "useipv6v4", "prefer_ipv6", "preferipv6":
+		return option.DomainStrategy(C.DomainStrategyPreferIPv6)
+	default:
+		return 0
+	}
+}
+
 func buildInbound(tag string, st *nodeState) (option.Inbound, error) {
 	switch st.info.Type {
 	case "vless":
 		return buildVLESSInbound(tag, st)
 	case "tuic":
 		return buildTUICInbound(tag, st)
+	case "hysteria2":
+		return buildHysteria2Inbound(tag, st)
+	case "shadowsocks":
+		return buildShadowsocksInbound(tag, st)
 	default:
-		return option.Inbound{}, fmt.Errorf("sing-box dataplane: protocol %q not supported yet (phase1: vless, tuic)", st.info.Type)
+		return option.Inbound{}, fmt.Errorf("sing-box dataplane: protocol %q not supported (supported: vless, tuic, hysteria2, shadowsocks)", st.info.Type)
 	}
 }
 
@@ -329,6 +372,102 @@ func buildTUICInbound(tag string, st *nodeState) (option.Inbound, error) {
 	}
 	tuicOpts.TLS = tlsOpts
 	return option.Inbound{Type: C.TypeTUIC, Tag: tag, Options: tuicOpts}, nil
+}
+
+func buildHysteria2Inbound(tag string, st *nodeState) (option.Inbound, error) {
+	info := st.info
+	cm := info.Common
+	users := make([]option.Hysteria2User, 0, len(st.users))
+	for _, u := range st.users {
+		users = append(users, option.Hysteria2User{
+			Name:     format.UserTag(tag, u.Uuid),
+			Password: u.Uuid,
+		})
+	}
+	hyOpts := &option.Hysteria2InboundOptions{
+		ListenOptions: option.ListenOptions{
+			Listen:     listenAddr(cm.ListenIP),
+			ListenPort: uint16(cm.ServerPort),
+		},
+		Users:                 users,
+		IgnoreClientBandwidth: cm.Ignore_Client_Bandwidth,
+	}
+	if !cm.Ignore_Client_Bandwidth {
+		hyOpts.UpMbps = cm.UpMbps
+		hyOpts.DownMbps = cm.DownMbps
+	}
+	if cm.Obfs != "" && cm.ObfsPassword != "" {
+		obfsType := cm.Obfs
+		if obfsType == "salamander" || obfsType == "" {
+			obfsType = "salamander"
+		}
+		hyOpts.Obfs = &option.Hysteria2Obfs{
+			Type:     obfsType,
+			Password: cm.ObfsPassword,
+		}
+	}
+	serverName := cm.ServerName
+	if serverName == "" {
+		serverName = cm.TlsSettings.PrimaryServerName()
+	}
+	tlsOpts := &option.InboundTLSOptions{
+		Enabled:    true,
+		ServerName: serverName,
+		ALPN:       badoption.Listable[string]{"h3"},
+	}
+	if cm.CertInfo != nil {
+		tlsOpts.CertificatePath = cm.CertInfo.CertFile
+		tlsOpts.KeyPath = cm.CertInfo.KeyFile
+	}
+	hyOpts.TLS = tlsOpts
+	return option.Inbound{Type: C.TypeHysteria2, Tag: tag, Options: hyOpts}, nil
+}
+
+func buildShadowsocksInbound(tag string, st *nodeState) (option.Inbound, error) {
+	info := st.info
+	cm := info.Common
+	method := cm.Cipher
+	if method == "" {
+		method = "aes-128-gcm"
+	}
+	users := make([]option.ShadowsocksUser, 0, len(st.users))
+	for _, u := range st.users {
+		users = append(users, option.ShadowsocksUser{
+			Name:     format.UserTag(tag, u.Uuid),
+			Password: ssUserPassword(u.Uuid, method, cm.ServerKey),
+		})
+	}
+	ssOpts := &option.ShadowsocksInboundOptions{
+		ListenOptions: option.ListenOptions{
+			Listen:     listenAddr(cm.ListenIP),
+			ListenPort: uint16(cm.ServerPort),
+		},
+		Method:  method,
+		Users:   users,
+		Managed: true, // force multi-user inbound so UpdateUsers works with empty initial set
+	}
+	if cm.ServerKey != "" {
+		ssOpts.Password = cm.ServerKey
+	}
+	return option.Inbound{Type: C.TypeShadowsocks, Tag: tag, Options: ssOpts}, nil
+}
+
+// ssUserPassword matches Xray buildSSUser: classic uses uuid; 2022 uses base64(uuid[:keyLen]).
+func ssUserPassword(uuid, cipher, serverKey string) string {
+	if serverKey == "" {
+		return uuid
+	}
+	keyLength := 16
+	switch cipher {
+	case "2022-blake3-aes-128-gcm":
+		keyLength = 16
+	case "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305":
+		keyLength = 32
+	}
+	if len(uuid) < keyLength {
+		return base64.StdEncoding.EncodeToString([]byte(uuid))
+	}
+	return base64.StdEncoding.EncodeToString([]byte(uuid[:keyLength]))
 }
 
 func parsePorts(s string) []uint16 {

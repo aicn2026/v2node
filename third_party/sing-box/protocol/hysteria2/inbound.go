@@ -129,18 +129,23 @@ func NewInbound(ctx context.Context, router adapter.Router, logger log.ContextLo
 	if err != nil {
 		return nil, err
 	}
-	userList := make([]int, 0, len(options.Users))
-	userNameList := make([]string, 0, len(options.Users))
-	userPasswordList := make([]string, 0, len(options.Users))
-	for index, user := range options.Users {
+	inbound.service = service
+	inbound.UpdateUsers(options.Users)
+	return inbound, nil
+}
+
+// UpdateUsers hot-reloads Hysteria2 users without restarting the listener.
+func (h *Inbound) UpdateUsers(users []option.Hysteria2User) {
+	userList := make([]int, 0, len(users))
+	userNameList := make([]string, 0, len(users))
+	userPasswordList := make([]string, 0, len(users))
+	for index, user := range users {
 		userList = append(userList, index)
 		userNameList = append(userNameList, user.Name)
 		userPasswordList = append(userPasswordList, user.Password)
 	}
-	service.UpdateUsers(userList, userPasswordList)
-	inbound.service = service
-	inbound.userNameList = userNameList
-	return inbound, nil
+	h.service.UpdateUsers(userList, userPasswordList)
+	h.userNameList = userNameList
 }
 
 func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, source M.Socksaddr, destination M.Socksaddr, onClose N.CloseHandlerFunc) {

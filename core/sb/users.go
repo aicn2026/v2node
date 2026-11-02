@@ -5,6 +5,8 @@ import (
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/option"
+	hy2in "github.com/sagernet/sing-box/protocol/hysteria2"
+	ssin "github.com/sagernet/sing-box/protocol/shadowsocks"
 	tuicin "github.com/sagernet/sing-box/protocol/tuic"
 	vlessin "github.com/sagernet/sing-box/protocol/vless"
 	panel "github.com/wyx2685/v2node/api/v2board"
@@ -57,6 +59,37 @@ func applyUsersToInbound(ib adapter.Inbound, tag string, st *nodeState) error {
 			})
 		}
 		return ti.UpdateUsers(users)
+	case "hysteria2":
+		h, ok := ib.(*hy2in.Inbound)
+		if !ok {
+			return fmt.Errorf("inbound %s is not hysteria2", tag)
+		}
+		users := make([]option.Hysteria2User, 0, len(st.users))
+		for _, u := range st.users {
+			users = append(users, option.Hysteria2User{
+				Name:     format.UserTag(tag, u.Uuid),
+				Password: u.Uuid,
+			})
+		}
+		h.UpdateUsers(users)
+		return nil
+	case "shadowsocks":
+		mi, ok := ib.(*ssin.MultiInbound)
+		if !ok {
+			return fmt.Errorf("inbound %s is not shadowsocks multi-user", tag)
+		}
+		cm := st.info.Common
+		method := cm.Cipher
+		if method == "" {
+			method = "aes-128-gcm"
+		}
+		names := make([]string, 0, len(st.users))
+		passwords := make([]string, 0, len(st.users))
+		for _, u := range st.users {
+			names = append(names, format.UserTag(tag, u.Uuid))
+			passwords = append(passwords, ssUserPassword(u.Uuid, method, cm.ServerKey))
+		}
+		return mi.UpdateUsers(names, passwords)
 	default:
 		return fmt.Errorf("hot update unsupported for %s", st.info.Type)
 	}

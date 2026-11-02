@@ -56,13 +56,13 @@ func (e *Engine) AddNode(tag string, info *panel.NodeInfo) error {
 		return fmt.Errorf("nil node info")
 	}
 	switch info.Type {
-	case "vless":
-	case "tuic":
+	case "vless", "shadowsocks":
+	case "tuic", "hysteria2":
 		if !quicEnabled {
-			return fmt.Errorf("sing-box dataplane: tuic requires build tag with_quic")
+			return fmt.Errorf("sing-box dataplane: %s requires build tag with_quic", info.Type)
 		}
 	default:
-		return fmt.Errorf("sing-box dataplane: protocol %q not supported yet (phase1: vless, tuic)", info.Type)
+		return fmt.Errorf("sing-box dataplane: protocol %q not supported (supported: vless, tuic, hysteria2, shadowsocks)", info.Type)
 	}
 	e.access.Lock()
 	defer e.access.Unlock()
