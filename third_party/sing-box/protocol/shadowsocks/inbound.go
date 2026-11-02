@@ -3,6 +3,7 @@ package shadowsocks
 import (
 	"context"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -111,11 +112,7 @@ func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata a
 	err := h.service.NewConnection(ctx, conn, adapter.UpstreamMetadata(metadata))
 	N.CloseOnHandshakeFailure(conn, onClose, err)
 	if err != nil {
-		if E.IsClosedOrCanceled(err) {
-			h.logger.DebugContext(ctx, "connection closed: ", err)
-		} else {
-			h.logger.ErrorContext(ctx, E.Cause(err, "process connection from ", metadata.Source))
-		}
+		logHandshakeError(h.logger, ctx, err, metadata.Source)
 	}
 }
 
@@ -123,7 +120,7 @@ func (h *Inbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata a
 func (h *Inbound) NewPacketEx(buffer *buf.Buffer, source M.Socksaddr) {
 	err := h.service.NewPacket(h.ctx, &stubPacketConn{h.listener.PacketWriter()}, buffer, M.Metadata{Source: source})
 	if err != nil {
-		h.logger.Error(E.Cause(err, "process packet from ", source))
+		logPacketError(h.logger, err, source)
 	}
 }
 
@@ -184,5 +181,54 @@ func NewError(logger logger.ContextLogger, ctx context.Context, err error) {
 		logger.DebugContext(ctx, "connection closed: ", err)
 		return
 	}
+	if isBenignAuthError(err) {
+		logger.DebugContext(ctx, err)
+		return
+	}
 	logger.ErrorContext(ctx, err)
+}
+
+// Probes, wrong passwords, truncated UDP, and replay noise are expected on a
+// public SS port; keep them at debug so journald is not flooded.
+func isBenignAuthError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "packet too short"),
+		strings.Contains(msg, "invalid request"),
+		strings.Contains(msg, "message authentication failed"),
+		strings.Contains(msg, "bad request salt"),
+		strings.Contains(msg, "salt not unique"),
+		strings.Contains(msg, "bad timestamp"),
+		strings.Contains(msg, "bad header type"),
+		strings.Contains(msg, "missing payload or padding"),
+		strings.Contains(msg, "damaged padding"):
+		return true
+	default:
+		return false
+	}
+}
+
+func logHandshakeError(logger logger.ContextLogger, ctx context.Context, err error, source M.Socksaddr) {
+	if E.IsClosedOrCanceled(err) {
+		logger.DebugContext(ctx, "connection closed: ", err)
+		return
+	}
+	wrapped := E.Cause(err, "process connection from ", source)
+	if isBenignAuthError(err) {
+		logger.DebugContext(ctx, wrapped)
+		return
+	}
+	logger.ErrorContext(ctx, wrapped)
+}
+
+func logPacketError(logger logger.ContextLogger, err error, source M.Socksaddr) {
+	wrapped := E.Cause(err, "process packet from ", source)
+	if isBenignAuthError(err) {
+		logger.Debug(wrapped)
+		return
+	}
+	logger.Error(wrapped)
 }

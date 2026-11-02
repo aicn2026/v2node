@@ -142,11 +142,7 @@ func (h *MultiInbound) NewConnectionEx(ctx context.Context, conn net.Conn, metad
 	err := h.service.NewConnection(ctx, conn, adapter.UpstreamMetadata(metadata))
 	N.CloseOnHandshakeFailure(conn, onClose, err)
 	if err != nil {
-		if E.IsClosedOrCanceled(err) {
-			h.logger.DebugContext(ctx, "connection closed: ", err)
-		} else {
-			h.logger.ErrorContext(ctx, E.Cause(err, "process connection from ", metadata.Source))
-		}
+		logHandshakeError(h.logger, ctx, err, metadata.Source)
 	}
 }
 
@@ -154,7 +150,7 @@ func (h *MultiInbound) NewConnectionEx(ctx context.Context, conn net.Conn, metad
 func (h *MultiInbound) NewPacketEx(buffer *buf.Buffer, source M.Socksaddr) {
 	err := h.service.NewPacket(h.ctx, &stubPacketConn{h.listener.PacketWriter()}, buffer, M.Metadata{Source: source})
 	if err != nil {
-		h.logger.Error(E.Cause(err, "process packet from ", source))
+		logPacketError(h.logger, err, source)
 	}
 }
 
