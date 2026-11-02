@@ -66,6 +66,8 @@ func (c *trackedNetConn) Close() error {
 	return err
 }
 
+func (c *trackedNetConn) Upstream() any { return c.Conn }
+
 type trackedPacketConn struct {
 	N.PacketConn
 	group *connGroup
@@ -80,3 +82,5 @@ func (c *trackedPacketConn) Close() error {
 	})
 	return err
 }
+
+func (c *trackedPacketConn) Upstream() any { return c.PacketConn }

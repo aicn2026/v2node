@@ -25,7 +25,7 @@ type Limiter struct {
 	OldUserOnline *sync.Map      // Key: Ip, value: Uid
 	UUIDtoUID     map[string]int // Key: UUID, value: Uid
 	UserLimitInfo *sync.Map      // Key: TagUUID value: UserLimitInfo
-	SpeedLimiter  *sync.Map      // key: TagUUID, value: *DynamicBucket
+	SpeedLimiter  *sync.Map      // key: TagUUID, value: *rate.DualLimiter
 	AliveList     map[int]int    // Key: Uid, value: alive_ip
 }
 
@@ -102,10 +102,10 @@ func (l *Limiter) UpdateUser(tag string, added []panel.UserInfo, deleted []panel
 		limit := int64(determineSpeedLimit(l.SpeedLimit, modified[i].SpeedLimit)) * 1000000 / 8
 		if limit > 0 {
 			if v, ok := l.SpeedLimiter.Load(format.UserTag(tag, modified[i].Uuid)); ok {
-				d := v.(*rate.DynamicBucket)
+				d := v.(*rate.DualLimiter)
 				d.Update(limit)
 			} else {
-				d := rate.NewDynamicBucket(limit)
+				d := rate.NewDualLimiter(limit)
 				l.SpeedLimiter.Store(format.UserTag(tag, modified[i].Uuid), d)
 			}
 		} else {
@@ -140,7 +140,7 @@ func (l *Limiter) UpdateDynamicSpeedLimit(tag, uuid string, limit int, expire ti
 	return nil
 }
 
-func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPsource bool) (DynamicBucket *rate.DynamicBucket, Reject bool) {
+func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPsource bool) (lim *rate.DualLimiter, Reject bool) {
 	// check if ipv4 mapped ipv6
 	ip = strings.TrimPrefix(ip, "::ffff:")
 
@@ -202,18 +202,16 @@ func (l *Limiter) CheckLimit(taguuid string, ip string, noUDPsource bool) (Dynam
 		}
 	}
 
-	limit := int64(determineSpeedLimit(nodeLimit, userLimit)) * 1000000 / 8 // If you need the Speed limit
+	limit := int64(determineSpeedLimit(nodeLimit, userLimit)) * 1000000 / 8 // bytes/sec per direction
 	if limit > 0 {
 		if v, ok := l.SpeedLimiter.Load(taguuid); ok {
-			return v.(*rate.DynamicBucket), false
-		} else {
-			d := rate.NewDynamicBucket(limit)
-			l.SpeedLimiter.Store(taguuid, d)
-			return d, false
+			return v.(*rate.DualLimiter), false
 		}
-	} else {
-		return nil, false
+		d := rate.NewDualLimiter(limit)
+		l.SpeedLimiter.Store(taguuid, d)
+		return d, false
 	}
+	return nil, false
 }
 
 func (l *Limiter) GetOnlineDevice() (*[]panel.OnlineUser, error) {

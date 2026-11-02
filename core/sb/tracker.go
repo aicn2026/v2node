@@ -40,12 +40,12 @@ func (t *trafficTracker) groupFor(email string) *connGroup {
 	return g
 }
 
-func (t *trafficTracker) applyLimit(email, inboundTag, ip string, isTCP bool) (bucket *rate.DynamicBucket, reject bool) {
-	lim, err := limiter.GetLimiter(inboundTag)
+func (t *trafficTracker) applyLimit(email, inboundTag, ip string, isTCP bool) (lim *rate.DualLimiter, reject bool) {
+	l, err := limiter.GetLimiter(inboundTag)
 	if err != nil {
 		return nil, false
 	}
-	return lim.CheckLimit(email, ip, isTCP)
+	return l.CheckLimit(email, ip, isTCP)
 }
 
 func sourceIP(metadata adapter.InboundContext) string {
@@ -60,14 +60,14 @@ func (t *trafficTracker) RoutedConnection(_ context.Context, conn net.Conn, meta
 	if user == "" {
 		return conn
 	}
-	bucket, reject := t.applyLimit(user, metadata.Inbound, sourceIP(metadata), true)
+	lim, reject := t.applyLimit(user, metadata.Inbound, sourceIP(metadata), true)
 	if reject {
 		log.Infof("Limited %s by conn or ip", user)
 		_ = conn.Close()
 		return conn
 	}
-	if bucket != nil {
-		conn = rate.NewDynamicConnRateLimiter(conn, bucket)
+	if lim != nil {
+		conn = rate.NewDualDynamicConnRateLimiter(conn, lim)
 	}
 	if t.counter != nil {
 		ts := t.counter.GetCounter(user)
@@ -84,14 +84,14 @@ func (t *trafficTracker) RoutedPacketConnection(_ context.Context, conn N.Packet
 	if user == "" {
 		return conn
 	}
-	bucket, reject := t.applyLimit(user, metadata.Inbound, sourceIP(metadata), false)
+	lim, reject := t.applyLimit(user, metadata.Inbound, sourceIP(metadata), false)
 	if reject {
 		log.Infof("Limited %s by conn or ip", user)
 		_ = conn.Close()
 		return conn
 	}
-	if bucket != nil {
-		conn = newRateLimitedPacketConn(conn, bucket)
+	if lim != nil {
+		conn = newRateLimitedPacketConn(conn, lim)
 	}
 	if t.counter != nil {
 		ts := t.counter.GetCounter(user)

@@ -19,64 +19,63 @@ type Conn struct {
 }
 
 func (c *Conn) Read(b []byte) (n int, err error) {
-	c.limiter.Wait(int64(len(b)))
-	return c.Conn.Read(b)
+	n, err = c.Conn.Read(b)
+	if n > 0 {
+		c.limiter.Wait(int64(n))
+	}
+	return n, err
 }
 
 func (c *Conn) Write(b []byte) (n int, err error) {
-	c.limiter.Wait(int64(len(b)))
-	return c.Conn.Write(b)
+	n, err = c.Conn.Write(b)
+	if n > 0 {
+		c.limiter.Wait(int64(n))
+	}
+	return n, err
 }
 
-// NewDynamicConnRateLimiter wraps conn with a hot-swappable DynamicBucket (panel speed limit).
+// NewDualDynamicConnRateLimiter caps upload (Read) and download (Write) independently.
+// For an inbound client conn: Read=user upload, Write=user download.
+func NewDualDynamicConnRateLimiter(c net.Conn, lim *DualLimiter) net.Conn {
+	if lim == nil {
+		return c
+	}
+	return &DynamicConn{Conn: c, up: lim.Up, down: lim.Down}
+}
+
+// Deprecated alias kept for call sites that still pass a single bucket.
 func NewDynamicConnRateLimiter(c net.Conn, l *DynamicBucket) net.Conn {
 	if l == nil {
 		return c
 	}
-	return &DynamicConn{Conn: c, limiter: l}
+	return &DynamicConn{Conn: c, up: l, down: l}
 }
 
 type DynamicConn struct {
 	net.Conn
-	limiter *DynamicBucket
+	up, down *DynamicBucket
 }
 
 func (c *DynamicConn) Read(b []byte) (n int, err error) {
-	if bkt := c.limiter.Get(); bkt != nil {
-		bkt.Wait(int64(len(b)))
+	n, err = c.Conn.Read(b)
+	if n > 0 && c.up != nil {
+		if bkt := c.up.Get(); bkt != nil {
+			bkt.Wait(int64(n))
+		}
 	}
-	return c.Conn.Read(b)
+	return n, err
 }
 
 func (c *DynamicConn) Write(b []byte) (n int, err error) {
-	if bkt := c.limiter.Get(); bkt != nil {
-		bkt.Wait(int64(len(b)))
+	n, err = c.Conn.Write(b)
+	if n > 0 && c.down != nil {
+		if bkt := c.down.Get(); bkt != nil {
+			bkt.Wait(int64(n))
+		}
 	}
-	return c.Conn.Write(b)
+	return n, err
 }
 
-/*
-type PacketConnCounter struct {
-	network.PacketConn
-	limiter *ratelimit.Bucket
+func (c *DynamicConn) Upstream() any {
+	return c.Conn
 }
-
-func NewPacketConnCounter(conn network.PacketConn, l *ratelimit.Bucket) network.PacketConn {
-	return &PacketConnCounter{
-		PacketConn: conn,
-		limiter:    l,
-	}
-}
-
-func (p *PacketConnCounter) ReadPacket(buff *buf.Buffer) (destination M.Socksaddr, err error) {
-	pLen := buff.Len()
-	destination, err = p.PacketConn.ReadPacket(buff)
-	p.limiter.Wait(int64(buff.Len() - pLen))
-	return destination, err
-}
-
-func (p *PacketConnCounter) WritePacket(buff *buf.Buffer, destination M.Socksaddr) (err error) {
-	p.limiter.Wait(int64(buff.Len()))
-	return p.PacketConn.WritePacket(buff, destination)
-}
-*/

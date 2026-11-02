@@ -9,20 +9,20 @@ import (
 
 type rateLimitedPacketConn struct {
 	N.PacketConn
-	limiter *rate.DynamicBucket
+	up, down *rate.DynamicBucket
 }
 
-func newRateLimitedPacketConn(conn N.PacketConn, limiter *rate.DynamicBucket) N.PacketConn {
-	if limiter == nil {
+func newRateLimitedPacketConn(conn N.PacketConn, lim *rate.DualLimiter) N.PacketConn {
+	if lim == nil {
 		return conn
 	}
-	return &rateLimitedPacketConn{PacketConn: conn, limiter: limiter}
+	return &rateLimitedPacketConn{PacketConn: conn, up: lim.Up, down: lim.Down}
 }
 
 func (c *rateLimitedPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
 	destination, err = c.PacketConn.ReadPacket(buffer)
-	if err == nil {
-		if bkt := c.limiter.Get(); bkt != nil {
+	if err == nil && buffer.Len() > 0 && c.up != nil {
+		if bkt := c.up.Get(); bkt != nil {
 			bkt.Wait(int64(buffer.Len()))
 		}
 	}
@@ -30,8 +30,18 @@ func (c *rateLimitedPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.So
 }
 
 func (c *rateLimitedPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
-	if bkt := c.limiter.Get(); bkt != nil {
-		bkt.Wait(int64(buffer.Len()))
+	n := buffer.Len()
+	err := c.PacketConn.WritePacket(buffer, destination)
+	if err == nil && n > 0 && c.down != nil {
+		if bkt := c.down.Get(); bkt != nil {
+			bkt.Wait(int64(n))
+		}
 	}
-	return c.PacketConn.WritePacket(buffer, destination)
+	return err
+}
+
+// Upstream lets sing-box walk wrappers when calculating buffer headroom.
+// Without this, mux/shadowsocks WritePacket panics on ExtendHeader.
+func (c *rateLimitedPacketConn) Upstream() any {
+	return c.PacketConn
 }
