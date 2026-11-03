@@ -11,10 +11,10 @@ A V2board backend based on embedded sing-box (panel API unchanged).
 
 ```
 # 单节点
-wget -N https://raw.githubusercontent.com/aicn2026/v2node/feat/singbox-dataplane/script/install.sh && bash install.sh --api-host https://mini.aicn.plus --api-key YOUR_KEY --node-id 59
+wget -N https://raw.githubusercontent.com/aicn2026/v2node/feat/singbox-dataplane/script/install.sh && bash install.sh --api-host https://example.com --api-key YOUR_KEY --node-id 1
 
 # 多节点（同一面板/密钥，多个 NodeID）
-wget -N https://raw.githubusercontent.com/aicn2026/v2node/feat/singbox-dataplane/script/install.sh && bash install.sh --api-host https://mini.aicn.plus --api-key YOUR_KEY --node-id 59,60,62
+wget -N https://raw.githubusercontent.com/aicn2026/v2node/feat/singbox-dataplane/script/install.sh && bash install.sh --api-host https://example.com --api-key YOUR_KEY --node-id 1,2,3
 ```
 
 ## 构建
