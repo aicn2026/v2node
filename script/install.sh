@@ -410,7 +410,7 @@ EOF
     fi
 
 
-    curl -o /usr/bin/v2node -Ls https://raw.githubusercontent.com/aicn2026/v2node/main/script/v2node.sh
+    curl -o /usr/bin/v2node -Ls https://raw.githubusercontent.com/aicn2026/v2node/feat/singbox-dataplane/script/v2node.sh
     chmod +x /usr/bin/v2node
 
     cd $cur_dir
