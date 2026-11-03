@@ -135,17 +135,36 @@ update() {
 }
 
 config() {
-    echo "v2node在修改配置后会自动尝试重启"
-    vi /etc/v2node/config.json
-    sleep 2
-    restart
+    local cfg="/etc/v2node/config.json"
+    if [[ ! -f "$cfg" ]]; then
+        echo -e "${red}配置文件不存在: ${cfg}${plain}"
+        if [[ $# == 0 ]]; then
+            before_show_menu
+        fi
+        return 1
+    fi
+
+    local before after
+    before=$(sha256sum "$cfg" 2>/dev/null | awk '{print $1}')
+    echo "提示: 有改动时运行中的服务会自动差分重载，菜单不再强制整服务重启。"
+    vi "$cfg"
+    after=$(sha256sum "$cfg" 2>/dev/null | awk '{print $1}')
+
+    if [[ -n "$before" && "$before" == "$after" ]]; then
+        echo -e "${green}配置未修改，跳过重启${plain}"
+    else
+        echo -e "${green}配置已保存。若服务正在运行，将自动差分重载（通常几秒内生效）${plain}"
+        echo "如需强制整服务重启，可执行: v2node restart"
+    fi
+
+    sleep 1
     check_status
     case $? in
         0)
             echo -e "v2node状态: ${green}已运行${plain}"
             ;;
         1)
-            echo -e "检测到您未启动v2node或v2node自动重启失败，是否查看日志？[Y/n]" && echo
+            echo -e "检测到 v2node 未运行，是否查看日志？[Y/n]" && echo
             read -e -rp "(默认: y):" yn
             [[ -z ${yn} ]] && yn="y"
             if [[ ${yn} == [Yy] ]]; then
