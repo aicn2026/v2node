@@ -66,8 +66,8 @@ parse_args() {
                 API_KEY_ARG="$2"; shift 2 ;;
             -h|--help)
                 echo "用法: $0 [版本号] [--api-host URL] [--api-key KEY] [--node-id ID[,ID...]]"
-                echo "示例: $0 --api-host https://mini.aicn.plus --api-key KEY --node-id 59,60,62"
-                echo "      $0 --api-host https://mini.aicn.plus --api-key KEY --node-id 59 --node-id 60"
+                echo "示例: $0 --api-host https://example.com --api-key KEY --node-id 1,2,3"
+                echo "      $0 --api-host https://example.com --api-key KEY --node-id 1 --node-id 2"
                 exit 0 ;;
             --*)
                 echo "未知参数: $1"; exit 1 ;;

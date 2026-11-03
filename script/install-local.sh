@@ -2,15 +2,15 @@
 # 离线安装：从 /tmp/v2node-linux-64.zip 安装 v2node（不依赖 GitHub）
 # 用法:
 #   bash install-local.sh
-#   bash install-local.sh --api-host https://mini.aicn.plus --api-key KEY --node-id 59,60,62
-#   bash install-local.sh --api-host https://mini.aicn.plus --api-key KEY --node-id 59 --node-id 60
+#   bash install-local.sh --api-host https://example.com --api-key KEY --node-id 1,2,3
+#   bash install-local.sh --api-host https://example.com --api-key KEY --node-id 1 --node-id 2
 #   ZIP=/tmp/v2node-linux-64.zip bash install-local.sh ...
 
 set -euo pipefail
 
 ZIP="${ZIP:-/tmp/v2node-linux-64.zip}"
-API_HOST="https://mini.aicn.plus"
-API_KEY="65C8wALHC42beDWt"
+API_HOST="https://example.com"
+API_KEY="YOUR_KEY"
 NODE_IDS=()
 
 append_node_ids() {
@@ -45,7 +45,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ${#NODE_IDS[@]} -eq 0 ]]; then
-  NODE_IDS=(59)
+  NODE_IDS=(1)
 fi
 
 if [[ ! -f "$ZIP" ]]; then
