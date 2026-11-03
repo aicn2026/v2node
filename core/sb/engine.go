@@ -3,13 +3,13 @@ package sb
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 
 	log "github.com/sirupsen/logrus"
 
 	box "github.com/sagernet/sing-box"
 	sbconst "github.com/sagernet/sing-box/constant"
-	"github.com/sagernet/sing-box/option"
 	panel "github.com/wyx2685/v2node/api/v2board"
 	"github.com/wyx2685/v2node/common/counter"
 	"github.com/wyx2685/v2node/common/format"
@@ -17,16 +17,16 @@ import (
 )
 
 // Engine is the sing-box dataplane behind v2node's panel-facing API.
+// Each panel node runs in its own sing-box instance so protocol/port
+// changes only restart that node and leave others connected.
 type Engine struct {
-	conf           *conf.Conf
-	access         sync.Mutex
-	nodes          sync.Map // tag -> *nodeState
-	uidMap         map[string]int
-	uidLock        sync.RWMutex
-	traffic        *counter.TrafficCounter
-	instance       *box.Box
-	extraOutbounds []option.Outbound
-	tracker        *trafficTracker
+	conf    *conf.Conf
+	access  sync.Mutex
+	nodes   sync.Map // tag -> *nodeState
+	uidMap  map[string]int
+	uidLock sync.RWMutex
+	traffic *counter.TrafficCounter
+	tracker *trafficTracker
 }
 
 func NewEngine(c *conf.Conf) *Engine {
@@ -40,16 +40,22 @@ func NewEngine(c *conf.Conf) *Engine {
 }
 
 func (e *Engine) Start(_ []*panel.NodeInfo) error {
-	e.access.Lock()
-	defer e.access.Unlock()
 	// Inbounds are added via AddNode after Start (same as Xray path).
-	return e.rebuildLocked()
+	return nil
 }
 
 func (e *Engine) Close() error {
 	e.access.Lock()
 	defer e.access.Unlock()
-	return e.closeInstanceLocked()
+	var firstErr error
+	e.nodes.Range(func(key, value any) bool {
+		st := value.(*nodeState)
+		if err := e.closeNodeLocked(st); err != nil && firstErr == nil {
+			firstErr = err
+		}
+		return true
+	})
+	return firstErr
 }
 
 func (e *Engine) AddNode(tag string, info *panel.NodeInfo) error {
@@ -67,20 +73,34 @@ func (e *Engine) AddNode(tag string, info *panel.NodeInfo) error {
 	}
 	e.access.Lock()
 	defer e.access.Unlock()
+	var users []panel.UserInfo
 	if v, ok := e.nodes.Load(tag); ok {
-		st := v.(*nodeState)
-		st.info = info
-	} else {
-		e.nodes.Store(tag, &nodeState{info: info})
+		old := v.(*nodeState)
+		users = old.users
+		// Close previous instance before replacing state (same tag port/protocol change).
+		if err := e.closeNodeLocked(old); err != nil {
+			log.WithField("err", err).WithField("tag", tag).Warn("close previous node instance")
+		}
 	}
-	return e.rebuildLocked()
+	st := &nodeState{info: info, users: users}
+	e.nodes.Store(tag, st)
+	return e.rebuildNodeLocked(tag, st)
 }
 
 func (e *Engine) DelNode(tag string) error {
 	e.access.Lock()
 	defer e.access.Unlock()
+	v, ok := e.nodes.Load(tag)
+	if !ok {
+		return nil
+	}
+	st := v.(*nodeState)
+	if err := e.closeNodeLocked(st); err != nil {
+		log.WithField("err", err).WithField("tag", tag).Warn("close node instance")
+	}
 	e.nodes.Delete(tag)
-	return e.rebuildLocked()
+	e.clearUIDForTag(tag)
+	return nil
 }
 
 func (e *Engine) AddUsers(tag string, users []panel.UserInfo, info *panel.NodeInfo) (int, error) {
@@ -105,10 +125,10 @@ func (e *Engine) AddUsers(tag string, users []panel.UserInfo, info *panel.NodeIn
 	}
 	st.users = mergeUsers(st.users, users)
 
-	// Prefer hot UpdateUsers (no listener restart). Fall back to rebuild if inbound missing.
+	// Prefer hot UpdateUsers (no listener restart). Fall back to rebuild this node only.
 	if err := e.hotUpdateUsers(tag, st); err != nil {
-		log.WithField("err", err).WithField("tag", tag).Debug("hot AddUsers fallback to rebuild")
-		if err := e.rebuildLocked(); err != nil {
+		log.WithField("err", err).WithField("tag", tag).Debug("hot AddUsers fallback to node rebuild")
+		if err := e.rebuildNodeLocked(tag, st); err != nil {
 			return 0, err
 		}
 	}
@@ -142,8 +162,8 @@ func (e *Engine) DelUsers(users []panel.UserInfo, tag string) error {
 	st.users = kept
 
 	if err := e.hotUpdateUsers(tag, st); err != nil {
-		log.WithField("err", err).WithField("tag", tag).Debug("hot DelUsers fallback to rebuild")
-		return e.rebuildLocked()
+		log.WithField("err", err).WithField("tag", tag).Debug("hot DelUsers fallback to node rebuild")
+		return e.rebuildNodeLocked(tag, st)
 	}
 	return nil
 }
@@ -184,38 +204,50 @@ func (e *Engine) GetUserTrafficSlice(tag string, minTraffic int) ([]panel.UserTr
 	return trafficSlice, nil
 }
 
-func (e *Engine) closeInstanceLocked() error {
-	if e.instance == nil {
+func (e *Engine) clearUIDForTag(tag string) {
+	prefix := tag + "|"
+	e.uidLock.Lock()
+	defer e.uidLock.Unlock()
+	for email := range e.uidMap {
+		if strings.HasPrefix(email, prefix) {
+			delete(e.uidMap, email)
+			e.traffic.Delete(email)
+			e.tracker.closeUser(email)
+		}
+	}
+}
+
+func (e *Engine) closeNodeLocked(st *nodeState) error {
+	if st == nil || st.instance == nil {
 		return nil
 	}
-	err := e.instance.Close()
-	e.instance = nil
+	err := st.instance.Close()
+	st.instance = nil
 	return err
 }
 
-func (e *Engine) rebuildLocked() error {
-	opts, err := e.buildOptions()
+func (e *Engine) rebuildNodeLocked(tag string, st *nodeState) error {
+	opts, err := e.buildNodeOptions(tag, st)
 	if err != nil {
 		return err
 	}
-	if err := e.closeInstanceLocked(); err != nil {
-		log.WithField("err", err).Warn("close previous sing-box instance")
+	if err := e.closeNodeLocked(st); err != nil {
+		log.WithField("err", err).WithField("tag", tag).Warn("close previous node instance")
 	}
-	// Empty inbounds: still start so later AddNode can rebuild.
 	ctx := boxContext(context.Background())
 	instance, err := box.New(box.Options{
 		Context: ctx,
 		Options: opts,
 	})
 	if err != nil {
-		return fmt.Errorf("create sing-box: %w", err)
+		return fmt.Errorf("create sing-box for %s: %w", tag, err)
 	}
 	instance.Router().AppendTracker(e.tracker)
 	if err := instance.Start(); err != nil {
 		_ = instance.Close()
-		return fmt.Errorf("start sing-box: %w", err)
+		return fmt.Errorf("start sing-box for %s: %w", tag, err)
 	}
-	e.instance = instance
-	log.Infof("sing-box %s dataplane ready: %d inbound(s)", sbconst.Version, len(opts.Inbounds))
+	st.instance = instance
+	log.Infof("sing-box %s node ready tag=%s", sbconst.Version, tag)
 	return nil
 }

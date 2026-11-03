@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/common/dialer"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
 	E "github.com/sagernet/sing/common/exceptions"
@@ -25,12 +26,17 @@ import (
 var _ ServerConfigCompat = (*RealityServerConfig)(nil)
 
 type RealityServerConfig struct {
-	config *utls.RealityConfig
+	config           *utls.RealityConfig
+	handshakeTimeout time.Duration
 }
 
-func NewRealityServer(ctx context.Context, logger log.Logger, options option.InboundTLSOptions) (*RealityServerConfig, error) {
+func NewRealityServer(ctx context.Context, logger log.ContextLogger, options option.InboundTLSOptions) (ServerConfig, error) {
 	var tlsConfig utls.RealityConfig
 
+	if options.CertificateProvider != nil {
+		return nil, E.New("certificate_provider is unavailable in reality")
+	}
+	//nolint:staticcheck
 	if options.ACME != nil && len(options.ACME.Domain) > 0 {
 		return nil, E.New("acme is unavailable in reality")
 	}
@@ -67,7 +73,10 @@ func NewRealityServer(ctx context.Context, logger log.Logger, options option.Inb
 			return nil, E.New("unknown cipher_suite: ", cipherSuite)
 		}
 	}
-	if len(options.Certificate) > 0 || options.CertificatePath != "" {
+	if len(options.CurvePreferences) > 0 {
+		return nil, E.New("curve preferences is unavailable in reality")
+	}
+	if len(options.Certificate) > 0 || options.CertificatePath != "" || len(options.ClientCertificatePublicKeySHA256) > 0 {
 		return nil, E.New("certificate is unavailable in reality")
 	}
 	if len(options.Key) > 0 || options.KeyPath != "" {
@@ -119,7 +128,31 @@ func NewRealityServer(ctx context.Context, logger log.Logger, options option.Inb
 		return handshakeDialer.DialContext(ctx, network, M.ParseSocksaddr(addr))
 	}
 
-	return &RealityServerConfig{&tlsConfig}, nil
+	if options.ECH != nil && options.ECH.Enabled {
+		return nil, E.New("Reality is conflict with ECH")
+	}
+	var handshakeTimeout time.Duration
+	if options.HandshakeTimeout > 0 {
+		handshakeTimeout = options.HandshakeTimeout.Build()
+	} else {
+		handshakeTimeout = C.TCPTimeout
+	}
+	var config ServerConfig = &RealityServerConfig{
+		config:           &tlsConfig,
+		handshakeTimeout: handshakeTimeout,
+	}
+	if options.KernelTx || options.KernelRx {
+		if !C.IsLinux {
+			return nil, E.New("kTLS is only supported on Linux")
+		}
+		config = &KTlSServerConfig{
+			ServerConfig: config,
+			logger:       logger,
+			kernelTx:     options.KernelTx,
+			kernelRx:     options.KernelRx,
+		}
+	}
+	return config, nil
 }
 
 func (c *RealityServerConfig) ServerName() string {
@@ -138,7 +171,15 @@ func (c *RealityServerConfig) SetNextProtos(nextProto []string) {
 	c.config.NextProtos = nextProto
 }
 
-func (c *RealityServerConfig) Config() (*tls.Config, error) {
+func (c *RealityServerConfig) HandshakeTimeout() time.Duration {
+	return c.handshakeTimeout
+}
+
+func (c *RealityServerConfig) SetHandshakeTimeout(timeout time.Duration) {
+	c.handshakeTimeout = timeout
+}
+
+func (c *RealityServerConfig) STDConfig() (*tls.Config, error) {
 	return nil, E.New("unsupported usage for reality")
 }
 
@@ -168,7 +209,8 @@ func (c *RealityServerConfig) ServerHandshake(ctx context.Context, conn net.Conn
 
 func (c *RealityServerConfig) Clone() Config {
 	return &RealityServerConfig{
-		config: c.config.Clone(),
+		config:           c.config.Clone(),
+		handshakeTimeout: c.handshakeTimeout,
 	}
 }
 
@@ -212,5 +254,5 @@ func (c *realityConnWrapper) ReaderReplaceable() bool {
 }
 
 func (c *realityConnWrapper) WriterReplaceable() bool {
-	return true
+	return false
 }

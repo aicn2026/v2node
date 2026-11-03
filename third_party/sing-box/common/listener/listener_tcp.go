@@ -17,7 +17,7 @@ import (
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 
-	"github.com/metacubex/tfo-go"
+	"github.com/database64128/tfo-go/v2"
 )
 
 func (l *Listener) ListenTCP() (net.Listener, error) {
@@ -37,7 +37,10 @@ func (l *Listener) ListenTCP() (net.Listener, error) {
 	if l.listenOptions.ReuseAddr {
 		listenConfig.Control = control.Append(listenConfig.Control, control.ReuseAddr())
 	}
-	if l.listenOptions.TCPKeepAlive >= 0 {
+	if l.listenOptions.DisableTCPKeepAlive {
+		listenConfig.KeepAlive = -1
+		listenConfig.KeepAliveConfig.Enable = false
+	} else {
 		keepIdle := time.Duration(l.listenOptions.TCPKeepAlive)
 		if keepIdle == 0 {
 			keepIdle = C.TCPKeepAliveInitial
@@ -46,13 +49,14 @@ func (l *Listener) ListenTCP() (net.Listener, error) {
 		if keepInterval == 0 {
 			keepInterval = C.TCPKeepAliveInterval
 		}
-		setKeepAliveConfig(&listenConfig, keepIdle, keepInterval)
+		listenConfig.KeepAliveConfig = net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     keepIdle,
+			Interval: keepInterval,
+		}
 	}
 	if l.listenOptions.TCPMultiPath {
-		if !go121Available {
-			return nil, E.New("MultiPath TCP requires go1.21, please recompile your binary.")
-		}
-		setMultiPathTCP(&listenConfig)
+		listenConfig.SetMultipathTCP(true)
 	}
 	if l.tproxy {
 		listenConfig.Control = control.Append(listenConfig.Control, func(network, address string, conn syscall.RawConn) error {
@@ -61,7 +65,7 @@ func (l *Listener) ListenTCP() (net.Listener, error) {
 			})
 		})
 	}
-	tcpListener, err := ListenNetworkNamespace[net.Listener](l.listenOptions.NetNs, func() (net.Listener, error) {
+	tcpListener, err := ListenNetworkNamespace[net.Listener](l.ctx, l.listenOptions.NetNs, func() (net.Listener, error) {
 		if l.listenOptions.TCPFastOpen {
 			var tfoConfig tfo.ListenConfig
 			tfoConfig.ListenConfig = listenConfig
@@ -80,30 +84,38 @@ func (l *Listener) ListenTCP() (net.Listener, error) {
 
 func (l *Listener) loopTCPIn() {
 	tcpListener := l.tcpListener
-	var metadata adapter.InboundContext
+	var (
+		metadata    adapter.InboundContext
+		acceptDelay time.Duration
+	)
 	for {
 		conn, err := tcpListener.Accept()
 		if err != nil {
-			//nolint:staticcheck
-			if netError, isNetError := err.(net.Error); isNetError && netError.Temporary() {
-				l.logger.Error(err)
-				continue
-			}
 			if l.shutdown.Load() && E.IsClosed(err) {
 				return
 			}
+			//nolint:staticcheck
+			if netError, isNetError := err.(net.Error); isNetError && netError.Temporary() {
+				if acceptDelay == 0 {
+					acceptDelay = 5 * time.Millisecond
+				} else {
+					acceptDelay = min(2*acceptDelay, time.Second)
+				}
+				l.logger.Error(err, ", retrying in ", acceptDelay)
+				time.Sleep(acceptDelay)
+				continue
+			}
 			l.tcpListener.Close()
 			l.logger.Error("tcp listener closed: ", err)
-			continue
+			return
 		}
+		acceptDelay = 0
 		//nolint:staticcheck
 		metadata.InboundDetour = l.listenOptions.Detour
-		//nolint:staticcheck
-		metadata.InboundOptions = l.listenOptions.InboundOptions
 		metadata.Source = M.SocksaddrFromNet(conn.RemoteAddr()).Unwrap()
 		metadata.OriginDestination = M.SocksaddrFromNet(conn.LocalAddr()).Unwrap()
 		ctx := log.ContextWithNewID(l.ctx)
 		l.logger.InfoContext(ctx, "inbound connection from ", metadata.Source)
-		go l.connHandler.NewConnectionEx(ctx, conn, metadata, nil)
+		go l.connHandler.NewConnection(ctx, conn, metadata, nil)
 	}
 }

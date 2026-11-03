@@ -10,7 +10,11 @@ A V2board backend based on embedded sing-box (panel API unchanged).
 ### 一键安装
 
 ```
-wget -N https://raw.githubusercontent.com/mouren1988/v2node/feat/singbox-dataplane/script/install.sh && bash install.sh
+# 单节点
+wget -N https://raw.githubusercontent.com/aicn2026/v2node/main/script/install.sh && bash install.sh --api-host https://mini.aicn.plus --api-key YOUR_KEY --node-id 59
+
+# 多节点（同一面板/密钥，多个 NodeID）
+wget -N https://raw.githubusercontent.com/aicn2026/v2node/main/script/install.sh && bash install.sh --api-host https://mini.aicn.plus --api-key YOUR_KEY --node-id 59,60,62
 ```
 
 ## 构建

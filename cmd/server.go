@@ -39,19 +39,7 @@ func init() {
 	command.AddCommand(&serverCommand)
 }
 
-func serverHandle(_ *cobra.Command, _ []string) {
-	showVersion()
-	c := conf.New()
-	err := c.LoadFromPath(config)
-	log.SetFormatter(&log.TextFormatter{
-		DisableTimestamp: true,
-		DisableQuote:     true,
-		PadLevelText:     false,
-	})
-	if err != nil {
-		log.WithField("err", err).Error("Load config file failed")
-		return
-	}
+func applyLogConfig(c *conf.Conf) {
 	switch c.LogConfig.Level {
 	case "debug":
 		log.SetLevel(log.DebugLevel)
@@ -66,9 +54,29 @@ func serverHandle(_ *cobra.Command, _ []string) {
 		f, err := os.OpenFile(c.LogConfig.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 		if err != nil {
 			log.WithField("err", err).Error("Open log file failed, using stdout instead")
+			return
+		}
+		if oldWriter, ok := log.StandardLogger().Out.(*os.File); ok && oldWriter != os.Stdout && oldWriter != os.Stderr {
+			oldWriter.Close()
 		}
 		log.SetOutput(f)
 	}
+}
+
+func serverHandle(_ *cobra.Command, _ []string) {
+	showVersion()
+	c := conf.New()
+	err := c.LoadFromPath(config)
+	log.SetFormatter(&log.TextFormatter{
+		DisableTimestamp: true,
+		DisableQuote:     true,
+		PadLevelText:     false,
+	})
+	if err != nil {
+		log.WithField("err", err).Error("Load config file failed")
+		return
+	}
+	applyLogConfig(c)
 	// Enable pprof if configured
 	if c.PprofPort != 0 {
 		go func() {
@@ -129,77 +137,30 @@ func serverHandle(_ *cobra.Command, _ []string) {
 			log.Info("收到退出信号，正在关闭程序...")
 			os.Exit(0)
 		case <-reloadCh:
-			log.Info("收到重启信号，正在重新加载配置...")
-			if err := reload(config, &nodes, &v2core); err != nil {
-				log.WithField("err", err).Panic("重启失败")
+			log.Info("收到配置变更信号，正在差分重载节点...")
+			if err := reload(config, nodes, v2core); err != nil {
+				// Do not Panic: a bad node config must not kill the whole process.
+				log.WithField("err", err).Error("差分重载失败，未变更的节点仍在运行；请检查配置后重试或手动 systemctl restart v2node")
+				continue
 			}
-			log.Info("重启成功")
+			log.Info("差分重载完成")
 		}
 	}
 }
 
-func reload(config string, nodes **node.Node, v2core **core.V2Core) error {
-	// Preserve old reload channel so new core continues to receive signals
-	var oldReloadCh chan struct{}
-	if *v2core != nil {
-		oldReloadCh = (*v2core).ReloadCh
-	}
-
-	if err := (*nodes).Close(); err != nil {
-		return err
-	}
-
-	if err := (*v2core).Close(); err != nil {
-		return err
-	}
-
+// reload diffs config.json Nodes and only starts/stops changed entries.
+// Unchanged nodes keep their sing-box instance and live connections.
+func reload(config string, nodes *node.Node, v2core *core.V2Core) error {
 	newConf := conf.New()
 	if err := newConf.LoadFromPath(config); err != nil {
 		return err
 	}
+	applyLogConfig(newConf)
 
-	switch newConf.LogConfig.Level {
-	case "debug":
-		log.SetLevel(log.DebugLevel)
-	case "info":
-		log.SetLevel(log.InfoLevel)
-	case "warn", "warning":
-		log.SetLevel(log.WarnLevel)
-	case "error":
-		log.SetLevel(log.ErrorLevel)
-	}
-	if newConf.LogConfig.Output != "" {
-		f, err := os.OpenFile(newConf.LogConfig.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
-		if err != nil {
-			log.WithField("err", err).Error("Open log file failed, using stdout instead")
-		} else {
-			// 关闭旧的日志文件（如果是文件）
-			if oldWriter, ok := log.StandardLogger().Out.(*os.File); ok && oldWriter != os.Stdout && oldWriter != os.Stderr {
-				oldWriter.Close()
-			}
-			log.SetOutput(f)
-		}
-	}
-
-	newNodes, err := node.New(newConf.NodeConfigs)
-	if err != nil {
+	if err := nodes.SyncConfig(newConf.NodeConfigs, v2core); err != nil {
 		return err
 	}
-
-	newCore := core.New(newConf)
-	// Reattach reload channel
-	newCore.ReloadCh = oldReloadCh
-	if err := newCore.Start(newNodes.NodeInfos); err != nil {
-		return err
-	}
-
-	if err := newNodes.Start(newConf.NodeConfigs, newCore); err != nil {
-		return err
-	}
-
-	*nodes = newNodes
-	*v2core = newCore
-
+	v2core.Config = newConf
 	runtime.GC()
 	return nil
 }

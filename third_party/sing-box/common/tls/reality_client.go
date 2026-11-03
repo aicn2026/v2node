@@ -28,10 +28,13 @@ import (
 	"unsafe"
 
 	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common"
 	"github.com/sagernet/sing/common/debug"
 	E "github.com/sagernet/sing/common/exceptions"
+	"github.com/sagernet/sing/common/logger"
+	M "github.com/sagernet/sing/common/metadata"
 	"github.com/sagernet/sing/common/ntp"
 	aTLS "github.com/sagernet/sing/common/tls"
 
@@ -49,12 +52,19 @@ type RealityClientConfig struct {
 	shortID   [8]byte
 }
 
-func NewRealityClient(ctx context.Context, serverAddress string, options option.OutboundTLSOptions) (*RealityClientConfig, error) {
+func NewRealityClient(ctx context.Context, logger logger.ContextLogger, serverAddress string, options option.OutboundTLSOptions) (Config, error) {
+	return newRealityClient(ctx, logger, serverAddress, options, false)
+}
+
+func newRealityClient(ctx context.Context, logger logger.ContextLogger, serverAddress string, options option.OutboundTLSOptions, allowEmptyServerName bool) (Config, error) {
 	if options.UTLS == nil || !options.UTLS.Enabled {
 		return nil, E.New("uTLS is required by reality client")
 	}
+	if options.Spoof != "" || options.SpoofMethod != "" {
+		return nil, E.New("spoof is unsupported in reality")
+	}
 
-	uClient, err := NewUTLSClient(ctx, serverAddress, options)
+	uClient, err := newUTLSClient(ctx, logger, serverAddress, options, allowEmptyServerName)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +84,20 @@ func NewRealityClient(ctx context.Context, serverAddress string, options option.
 	if decodedLen > 8 {
 		return nil, E.New("invalid short_id")
 	}
-	return &RealityClientConfig{ctx, uClient.(*UTLSClientConfig), publicKey, shortID}, nil
+
+	var config Config = &RealityClientConfig{ctx, uClient.(*UTLSClientConfig), publicKey, shortID}
+	if options.KernelRx || options.KernelTx {
+		if !C.IsLinux {
+			return nil, E.New("kTLS is only supported on Linux")
+		}
+		config = &KTLSClientConfig{
+			Config:   config,
+			logger:   logger,
+			kernelTx: options.KernelTx,
+			kernelRx: options.KernelRx,
+		}
+	}
+	return config, nil
 }
 
 func (e *RealityClientConfig) ServerName() string {
@@ -93,7 +116,15 @@ func (e *RealityClientConfig) SetNextProtos(nextProto []string) {
 	e.uClient.SetNextProtos(nextProto)
 }
 
-func (e *RealityClientConfig) Config() (*STDConfig, error) {
+func (e *RealityClientConfig) HandshakeTimeout() time.Duration {
+	return e.uClient.HandshakeTimeout()
+}
+
+func (e *RealityClientConfig) SetHandshakeTimeout(timeout time.Duration) {
+	e.uClient.SetHandshakeTimeout(timeout)
+}
+
+func (e *RealityClientConfig) STDConfig() (*STDConfig, error) {
 	return nil, E.New("unsupported usage for reality")
 }
 
@@ -224,7 +255,15 @@ func realityClientFallback(ctx context.Context, uConn net.Conn, serverName strin
 			},
 		},
 	}
-	request, _ := http.NewRequest("GET", "https://"+serverName, nil)
+	serverAddress := M.ParseSocksaddrHostPort(serverName, 0)
+	host := serverAddress.AddrString()
+	if serverAddress.IsIPv6() {
+		host = "[" + host + "]"
+	}
+	request, err := http.NewRequest("GET", "https://"+host, nil)
+	if err != nil {
+		return
+	}
 	request.Header.Set("User-Agent", fingerprint.Client)
 	request.AddCookie(&http.Cookie{Name: "padding", Value: strings.Repeat("0", mRand.Intn(32)+30)})
 	response, err := client.Do(request)
@@ -252,8 +291,8 @@ type realityVerifier struct {
 }
 
 func (c *realityVerifier) VerifyPeerCertificate(rawCerts [][]byte, verifiedChains [][]*x509.Certificate) error {
-	p, _ := reflect.TypeOf(c.Conn).Elem().FieldByName("peerCertificates")
-	certs := *(*([]*x509.Certificate))(unsafe.Pointer(uintptr(unsafe.Pointer(c.Conn)) + p.Offset))
+	p, _ := reflect.TypeFor[utls.Conn]().FieldByName("peerCertificates")
+	certs := *(*([]*x509.Certificate))(unsafe.Add(unsafe.Pointer(c.Conn), p.Offset))
 	if pub, ok := certs[0].PublicKey.(ed25519.PublicKey); ok {
 		h := hmac.New(sha512.New, c.authKey)
 		h.Write(pub)
@@ -313,5 +352,5 @@ func (c *realityClientConnWrapper) ReaderReplaceable() bool {
 }
 
 func (c *realityClientConnWrapper) WriterReplaceable() bool {
-	return true
+	return false
 }

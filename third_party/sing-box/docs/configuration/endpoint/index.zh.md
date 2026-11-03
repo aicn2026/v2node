@@ -1,7 +1,3 @@
----
-icon: material/new-box
----
-
 !!! question "自 sing-box 1.11.0 起"
 
 # 端点
@@ -23,10 +19,13 @@ icon: material/new-box
 
 ### 字段
 
-| 类型          | 格式                        |
-|-------------|---------------------------|
-| `wireguard` | [WireGuard](./wireguard/) |
-| `tailscale` | [Tailscale](./tailscale/) |
+| 类型               | 格式                                      |
+|------------------|-----------------------------------------|
+| `wireguard`      | [WireGuard](./wireguard/)               |
+| `tailscale`      | [Tailscale](./tailscale/)               |
+| `openconnect`    | [OpenConnect 客户端](./openconnect/)       |
+| `openvpn-client` | [OpenVPN 客户端](./openvpn-client/)         |
+| `openvpn-server` | [OpenVPN 服务器](./openvpn-server/)         |
 
 #### tag
 

@@ -40,8 +40,6 @@ func (c *rateLimitedPacketConn) WritePacket(buffer *buf.Buffer, destination M.So
 	return err
 }
 
-// Upstream lets sing-box walk wrappers when calculating buffer headroom.
-// Without this, mux/shadowsocks WritePacket panics on ExtendHeader.
 func (c *rateLimitedPacketConn) Upstream() any {
 	return c.PacketConn
 }

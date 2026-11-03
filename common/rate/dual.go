@@ -1,7 +1,8 @@
 package rate
 
-// DualLimiter holds independent upload/download buckets at the same panel rate,
-// so sequential speed tests can peak at the configured Mbps in each direction.
+// DualLimiter holds independent upload/download buckets at the same panel rate
+// (v0.1.5 behavior), so sequential speed tests can peak near the configured
+// Mbps in each direction without sharing one bucket.
 type DualLimiter struct {
 	Up   *DynamicBucket
 	Down *DynamicBucket

@@ -38,8 +38,22 @@ fi
 ########################
 VERSION_ARG=""
 API_HOST_ARG=""
-NODE_ID_ARG=""
 API_KEY_ARG=""
+NODE_IDS_ARG=()
+
+append_node_ids() {
+    local raw="$1"
+    raw="${raw//,/ }"
+    local id
+    for id in $raw; do
+        [[ -z "$id" ]] && continue
+        if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+            echo -e "${red}无效节点ID: ${id}${plain}"
+            exit 1
+        fi
+        NODE_IDS_ARG+=("$id")
+    done
+}
 
 parse_args() {
     while [[ $# -gt 0 ]]; do
@@ -47,11 +61,13 @@ parse_args() {
             --api-host)
                 API_HOST_ARG="$2"; shift 2 ;;
             --node-id)
-                NODE_ID_ARG="$2"; shift 2 ;;
+                append_node_ids "$2"; shift 2 ;;
             --api-key)
                 API_KEY_ARG="$2"; shift 2 ;;
             -h|--help)
-                echo "用法: $0 [版本号] [--api-host URL] [--node-id ID] [--api-key KEY]"
+                echo "用法: $0 [版本号] [--api-host URL] [--api-key KEY] [--node-id ID[,ID...]]"
+                echo "示例: $0 --api-host https://mini.aicn.plus --api-key KEY --node-id 59,60,62"
+                echo "      $0 --api-host https://mini.aicn.plus --api-key KEY --node-id 59 --node-id 60"
                 exit 0 ;;
             --*)
                 echo "未知参数: $1"; exit 1 ;;
@@ -220,8 +236,32 @@ check_status() {
 
 generate_v2node_config() {
         local api_host="$1"
-        local node_id="$2"
-        local api_key="$3"
+        local api_key="$2"
+        shift 2
+        local node_ids=("$@")
+
+        if [[ ${#node_ids[@]} -eq 0 ]]; then
+            echo -e "${red}未指定节点ID${plain}"
+            return 1
+        fi
+
+        local nodes_json=""
+        local i=0
+        local id
+        for id in "${node_ids[@]}"; do
+            [[ -z "$id" ]] && continue
+            if [[ $i -gt 0 ]]; then
+                nodes_json+=",
+"
+            fi
+            nodes_json+="        {
+            \"ApiHost\": \"${api_host}\",
+            \"NodeID\": ${id},
+            \"ApiKey\": \"${api_key}\",
+            \"Timeout\": 15
+        }"
+            i=$((i + 1))
+        done
 
         mkdir -p /etc/v2node >/dev/null 2>&1
         cat > /etc/v2node/config.json <<EOF
@@ -232,16 +272,11 @@ generate_v2node_config() {
         "Access": "none"
     },
     "Nodes": [
-        {
-            "ApiHost": "${api_host}",
-            "NodeID": ${node_id},
-            "ApiKey": "${api_key}",
-            "Timeout": 15
-        }
+${nodes_json}
     ]
 }
 EOF
-        echo -e "${green}V2node 配置文件生成完成,正在重新启动服务${plain}"
+        echo -e "${green}V2node 配置文件生成完成（${#node_ids[@]} 个节点）,正在重新启动服务${plain}"
         if [[ x"${release}" == x"alpine" ]]; then
             service v2node restart
         else
@@ -267,13 +302,13 @@ install_v2node() {
     cd /usr/local/v2node/
 
     if  [[ -z "$version_param" ]] ; then
-        last_version=$(curl -Ls "https://api.github.com/repos/mouren1988/v2node/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        last_version=$(curl -Ls "https://api.github.com/repos/aicn2026/v2node/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
         if [[ ! -n "$last_version" ]]; then
             echo -e "${red}检测 v2node 版本失败，可能是超出 Github API 限制，请稍后再试，或手动指定 v2node 版本安装${plain}"
             exit 1
         fi
         echo -e "${green}检测到最新版本：${last_version}，开始安装...${plain}"
-        url="https://github.com/mouren1988/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
+        url="https://github.com/aicn2026/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
         curl -sL "$url" | pv -s 30M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 v2node 失败，请确保你的服务器能够下载 Github 的文件${plain}"
@@ -281,7 +316,7 @@ install_v2node() {
         fi
     else
         last_version="v${version_param#v}"
-        url="https://github.com/mouren1988/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
+        url="https://github.com/aicn2026/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
         curl -sL "$url" | pv -s 30M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 v2node $1 失败，请确保此版本存在${plain}"
@@ -349,8 +384,8 @@ EOF
 
     if [[ ! -f /etc/v2node/config.json ]]; then
         # 如果通过 CLI 传入了完整参数，则直接生成配置并跳过交互
-        if [[ -n "$API_HOST_ARG" && -n "$NODE_ID_ARG" && -n "$API_KEY_ARG" ]]; then
-            generate_v2node_config "$API_HOST_ARG" "$NODE_ID_ARG" "$API_KEY_ARG"
+        if [[ -n "$API_HOST_ARG" && ${#NODE_IDS_ARG[@]} -gt 0 && -n "$API_KEY_ARG" ]]; then
+            generate_v2node_config "$API_HOST_ARG" "$API_KEY_ARG" "${NODE_IDS_ARG[@]}"
             echo -e "${green}已根据参数生成 /etc/v2node/config.json${plain}"
             first_install=false
         else
@@ -375,7 +410,7 @@ EOF
     fi
 
 
-    curl -o /usr/bin/v2node -Ls https://raw.githubusercontent.com/mouren1988/v2node/feat/singbox-dataplane/script/v2node.sh
+    curl -o /usr/bin/v2node -Ls https://raw.githubusercontent.com/aicn2026/v2node/main/script/v2node.sh
     chmod +x /usr/bin/v2node
 
     cd $cur_dir
@@ -405,12 +440,14 @@ EOF
             # 交互式收集参数，提供示例默认值
             read -rp "面板API地址[格式: https://example.com/]: " api_host
             api_host=${api_host:-https://example.com/}
-            read -rp "节点ID: " node_id
+            read -rp "节点ID(多个用逗号分隔, 如 59,60,62): " node_id
             node_id=${node_id:-1}
             read -rp "节点通讯密钥: " api_key
+            NODE_IDS_ARG=()
+            append_node_ids "$node_id"
 
             # 生成配置文件（覆盖可能从包中复制的模板）
-            generate_v2node_config "$api_host" "$node_id" "$api_key"
+            generate_v2node_config "$api_host" "$api_key" "${NODE_IDS_ARG[@]}"
         else
             echo "${green}已跳过自动生成配置。如需后续生成，可执行: v2node generate${plain}"
         fi

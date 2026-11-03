@@ -107,7 +107,7 @@ before_show_menu() {
 }
 
 install() {
-    bash <(curl -Ls https://raw.githubusercontent.com/mouren1988/v2node/feat/singbox-dataplane/script/install.sh)
+    bash <(curl -Ls https://raw.githubusercontent.com/aicn2026/v2node/main/script/install.sh)
     if [[ $? == 0 ]]; then
         if [[ $# == 0 ]]; then
             start
@@ -123,7 +123,7 @@ update() {
     else
         version=$2
     fi
-    bash <(curl -Ls https://raw.githubusercontent.com/mouren1988/v2node/feat/singbox-dataplane/script/install.sh) $version
+    bash <(curl -Ls https://raw.githubusercontent.com/aicn2026/v2node/main/script/install.sh) $version
     if [[ $? == 0 ]]; then
         echo -e "${green}更新完成，已自动重启 v2node，请使用 v2node log 查看运行日志${plain}"
         exit
@@ -307,7 +307,7 @@ show_log() {
 }
 
 update_shell() {
-    wget -O /usr/bin/v2node -N --no-check-certificate https://raw.githubusercontent.com/mouren1988/v2node/feat/singbox-dataplane/script/v2node.sh
+    wget -O /usr/bin/v2node -N --no-check-certificate https://raw.githubusercontent.com/aicn2026/v2node/main/script/v2node.sh
     if [[ $? != 0 ]]; then
         echo ""
         echo -e "${red}下载脚本失败，请检查本机能否连接 Github${plain}"
@@ -422,8 +422,32 @@ show_v2node_version() {
 
 generate_v2node_config() {
         local api_host="$1"
-        local node_id="$2"
-        local api_key="$3"
+        local api_key="$2"
+        shift 2
+        local node_ids=("$@")
+
+        if [[ ${#node_ids[@]} -eq 0 ]]; then
+            echo -e "${red}未指定节点ID${plain}"
+            return 1
+        fi
+
+        local nodes_json=""
+        local i=0
+        local id
+        for id in "${node_ids[@]}"; do
+            [[ -z "$id" ]] && continue
+            if [[ $i -gt 0 ]]; then
+                nodes_json+=",
+"
+            fi
+            nodes_json+="        {
+            \"ApiHost\": \"${api_host}\",
+            \"NodeID\": ${id},
+            \"ApiKey\": \"${api_key}\",
+            \"Timeout\": 15
+        }"
+            i=$((i + 1))
+        done
 
         mkdir -p /etc/v2node >/dev/null 2>&1
         cat > /etc/v2node/config.json <<EOF
@@ -434,16 +458,11 @@ generate_v2node_config() {
         "Access": "none"
     },
     "Nodes": [
-        {
-            "ApiHost": "${api_host}",
-            "NodeID": ${node_id},
-            "ApiKey": "${api_key}",
-            "Timeout": 15
-        }
+${nodes_json}
     ]
 }
 EOF
-        echo -e "${green}V2node 配置文件生成完成,正在重新启动服务${plain}"
+        echo -e "${green}V2node 配置文件生成完成（${#node_ids[@]} 个节点）,正在重新启动服务${plain}"
         if [[ x"${release}" == x"alpine" ]]; then
             service v2node restart
         else
@@ -464,12 +483,20 @@ generate_config_file() {
     # 交互式收集参数，提供示例默认值
     read -rp "面板API地址[格式: https://example.com/]: " api_host
     api_host=${api_host:-https://example.com/}
-    read -rp "节点ID: " node_id
-    node_id=${node_id:-1}
+    read -rp "节点ID(多个用逗号分隔, 如 59,60,62): " node_id_raw
+    node_id_raw=${node_id_raw:-1}
     read -rp "节点通讯密钥: " api_key
 
+    local node_ids=()
+    local raw="${node_id_raw//,/ }"
+    local id
+    for id in $raw; do
+        [[ -z "$id" ]] && continue
+        node_ids+=("$id")
+    done
+
     # 生成配置文件（覆盖可能从包中复制的模板）
-    generate_v2node_config "$api_host" "$node_id" "$api_key"
+    generate_v2node_config "$api_host" "$api_key" "${node_ids[@]}"
 }
 
 # 放开防火墙端口
@@ -513,7 +540,7 @@ show_usage() {
 show_menu() {
     echo -e "
   ${green}v2node 后端管理脚本，${plain}${red}不适用于docker${plain}
---- https://github.com/mouren1988/v2node ---
+--- https://github.com/aicn2026/v2node ---
   ${green}0.${plain} 修改配置
 ————————————————
   ${green}1.${plain} 安装 v2node

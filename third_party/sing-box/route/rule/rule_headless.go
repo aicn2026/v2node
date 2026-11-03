@@ -41,6 +41,11 @@ func NewDefaultHeadlessRule(ctx context.Context, options option.DefaultHeadlessR
 			invert: options.Invert,
 		},
 	}
+	if len(options.QueryType) > 0 {
+		item := NewQueryTypeItem(options.QueryType)
+		rule.items = append(rule.items, item)
+		rule.allItems = append(rule.allItems, item)
+	}
 	if len(options.Network) > 0 {
 		item := NewNetworkItem(options.Network)
 		rule.items = append(rule.items, item)
@@ -144,6 +149,14 @@ func NewDefaultHeadlessRule(ctx context.Context, options option.DefaultHeadlessR
 		rule.items = append(rule.items, item)
 		rule.allItems = append(rule.allItems, item)
 	}
+	if len(options.PackageNameRegex) > 0 {
+		item, err := NewPackageNameRegexItem(options.PackageNameRegex)
+		if err != nil {
+			return nil, E.Cause(err, "package_name_regex")
+		}
+		rule.items = append(rule.items, item)
+		rule.allItems = append(rule.allItems, item)
+	}
 	if networkManager != nil {
 		if len(options.NetworkType) > 0 {
 			item := NewNetworkTypeItem(networkManager, common.Map(options.NetworkType, option.InterfaceType.Build))
@@ -164,13 +177,21 @@ func NewDefaultHeadlessRule(ctx context.Context, options option.DefaultHeadlessR
 			item := NewWIFISSIDItem(networkManager, options.WIFISSID)
 			rule.items = append(rule.items, item)
 			rule.allItems = append(rule.allItems, item)
-
 		}
 		if len(options.WIFIBSSID) > 0 {
 			item := NewWIFIBSSIDItem(networkManager, options.WIFIBSSID)
 			rule.items = append(rule.items, item)
 			rule.allItems = append(rule.allItems, item)
-
+		}
+		if options.NetworkInterfaceAddress != nil && options.NetworkInterfaceAddress.Size() > 0 {
+			item := NewNetworkInterfaceAddressItem(networkManager, options.NetworkInterfaceAddress)
+			rule.items = append(rule.items, item)
+			rule.allItems = append(rule.allItems, item)
+		}
+		if len(options.DefaultInterfaceAddress) > 0 {
+			item := NewDefaultInterfaceAddressItem(networkManager, options.DefaultInterfaceAddress)
+			rule.items = append(rule.items, item)
+			rule.allItems = append(rule.allItems, item)
 		}
 	}
 	if len(options.AdGuardDomain) > 0 {

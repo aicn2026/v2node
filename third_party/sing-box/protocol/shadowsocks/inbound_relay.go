@@ -59,7 +59,7 @@ func newRelayInbound(ctx context.Context, router adapter.Router, logger log.Cont
 		options.Method,
 		options.Password,
 		int64(udpTimeout.Seconds()),
-		adapter.NewUpstreamHandler(adapter.InboundContext{}, inbound.newConnection, inbound.newPacketConnection, inbound),
+		adapter.NewLegacyUpstreamHandler(adapter.InboundContext{}, inbound.newConnection, inbound.newPacketConnection, inbound),
 	)
 	if err != nil {
 		return nil, err
@@ -85,19 +85,20 @@ func newRelayInbound(ctx context.Context, router adapter.Router, logger log.Cont
 	return inbound, err
 }
 
-func (h *RelayInbound) Start(stage adapter.StartStage) error {
+func (h *RelayInbound) Start(stage adapter.StartStage, scope *adapter.Scope) error {
 	if stage != adapter.StartStateStart {
 		return nil
 	}
-	return h.listener.Start()
-}
-
-func (h *RelayInbound) Close() error {
-	return h.listener.Close()
+	err := h.listener.Start()
+	if err != nil {
+		return err
+	}
+	scope.Add(h.listener.Close)
+	return nil
 }
 
 //nolint:staticcheck
-func (h *RelayInbound) NewConnectionEx(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
+func (h *RelayInbound) NewConnection(ctx context.Context, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	err := h.service.NewConnection(ctx, conn, adapter.UpstreamMetadata(metadata))
 	N.CloseOnHandshakeFailure(conn, onClose, err)
 	if err != nil {
@@ -106,7 +107,7 @@ func (h *RelayInbound) NewConnectionEx(ctx context.Context, conn net.Conn, metad
 }
 
 //nolint:staticcheck
-func (h *RelayInbound) NewPacketEx(buffer *buf.Buffer, source M.Socksaddr) {
+func (h *RelayInbound) NewPacket(buffer *buf.Buffer, source M.Socksaddr) {
 	err := h.service.NewPacket(h.ctx, &stubPacketConn{h.listener.PacketWriter()}, buffer, M.Metadata{Source: source})
 	if err != nil {
 		logPacketError(h.logger, err, source)
@@ -130,7 +131,6 @@ func (h *RelayInbound) newConnection(ctx context.Context, conn net.Conn, metadat
 	//nolint:staticcheck
 	metadata.InboundDetour = h.listener.ListenOptions().Detour
 	//nolint:staticcheck
-	metadata.InboundOptions = h.listener.ListenOptions().InboundOptions
 	return h.router.RouteConnection(ctx, conn, metadata)
 }
 
@@ -153,7 +153,6 @@ func (h *RelayInbound) newPacketConnection(ctx context.Context, conn N.PacketCon
 	//nolint:staticcheck
 	metadata.InboundDetour = h.listener.ListenOptions().Detour
 	//nolint:staticcheck
-	metadata.InboundOptions = h.listener.ListenOptions().InboundOptions
 	return h.router.RoutePacketConnection(ctx, conn, metadata)
 }
 

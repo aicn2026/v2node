@@ -9,6 +9,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-tun"
 	"github.com/sagernet/sing/common/bufio"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/wyx2685/v2node/common/counter"
@@ -107,4 +108,9 @@ func (t *trafficTracker) RoutedPacketConnection(_ context.Context, conn N.Packet
 	tc := &trackedPacketConn{PacketConn: conn, group: g}
 	g.add(tc)
 	return tc
+}
+
+// RoutedFlow is required by sing-box 1.14 ConnectionTracker; TUN flow tracking unused here.
+func (t *trafficTracker) RoutedFlow(context.Context, adapter.InboundContext, adapter.Rule, adapter.Outbound) tun.FlowTracker {
+	return nil
 }

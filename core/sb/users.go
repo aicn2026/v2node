@@ -14,10 +14,10 @@ import (
 )
 
 func (e *Engine) hotUpdateUsers(tag string, st *nodeState) error {
-	if e.instance == nil || st.info == nil {
+	if st == nil || st.instance == nil || st.info == nil {
 		return fmt.Errorf("instance or node info missing")
 	}
-	ib, ok := e.instance.Inbound().Get(tag)
+	ib, ok := st.instance.Inbound().Get(tag)
 	if !ok {
 		return fmt.Errorf("inbound %s not found", tag)
 	}

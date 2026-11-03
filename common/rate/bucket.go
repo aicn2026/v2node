@@ -8,6 +8,7 @@ import (
 )
 
 // DynamicBucket is a hot-swappable ratelimit.Bucket used by the panel limiter.
+// Same as v0.1.5: 1s quantum, capacity = 1s of traffic.
 type DynamicBucket struct {
 	v atomic.Value // *ratelimit.Bucket
 }

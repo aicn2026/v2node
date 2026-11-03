@@ -5,7 +5,9 @@ package wireguard
 import (
 	"context"
 	"net"
+	"net/netip"
 	"os"
+	"sync"
 
 	"github.com/sagernet/gvisor/pkg/buffer"
 	"github.com/sagernet/gvisor/pkg/tcpip"
@@ -14,9 +16,11 @@ import (
 	"github.com/sagernet/gvisor/pkg/tcpip/network/ipv4"
 	"github.com/sagernet/gvisor/pkg/tcpip/network/ipv6"
 	"github.com/sagernet/gvisor/pkg/tcpip/stack"
+	"github.com/sagernet/gvisor/pkg/tcpip/transport/icmp"
 	"github.com/sagernet/gvisor/pkg/tcpip/transport/tcp"
 	"github.com/sagernet/gvisor/pkg/tcpip/transport/udp"
 	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/buf"
 	E "github.com/sagernet/sing/common/exceptions"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
@@ -27,24 +31,29 @@ import (
 var _ Device = (*stackDevice)(nil)
 
 type stackDevice struct {
-	stack      *stack.Stack
-	mtu        uint32
-	events     chan wgTun.Event
-	outbound   chan *stack.PacketBuffer
-	done       chan struct{}
-	dispatcher stack.NetworkDispatcher
-	addr4      tcpip.Address
-	addr6      tcpip.Address
+	stack          *stack.Stack
+	mtu            uint32
+	events         chan wgTun.Event
+	outbound       chan *stack.PacketBuffer
+	packetOutbound chan *buf.Buffer
+	done           chan struct{}
+	closeOnce      sync.Once
+	dispatcher     stack.NetworkDispatcher
+	inet4Address   netip.Addr
+	inet6Address   netip.Addr
+	icmpForwarder  *tun.ICMPForwarder
+	udpForwarder   *tun.UDPForwarder
 }
 
 func newStackDevice(options DeviceOptions) (*stackDevice, error) {
 	tunDevice := &stackDevice{
-		mtu:      options.MTU,
-		events:   make(chan wgTun.Event, 1),
-		outbound: make(chan *stack.PacketBuffer, 256),
-		done:     make(chan struct{}),
+		mtu:            options.MTU,
+		events:         make(chan wgTun.Event, 1),
+		outbound:       make(chan *stack.PacketBuffer, 256),
+		packetOutbound: make(chan *buf.Buffer, 256),
+		done:           make(chan struct{}),
 	}
-	ipStack, err := tun.NewGVisorStack((*wireEndpoint)(tunDevice))
+	ipStack, err := tun.NewGVisorStackWithOptions((*wireEndpoint)(tunDevice), stack.NICOptions{}, true)
 	if err != nil {
 		return nil, err
 	}
@@ -57,10 +66,10 @@ func newStackDevice(options DeviceOptions) (*stackDevice, error) {
 			},
 		}
 		if prefix.Addr().Is4() {
-			tunDevice.addr4 = addr
+			tunDevice.inet4Address = prefix.Addr()
 			protoAddr.Protocol = ipv4.ProtocolNumber
 		} else {
-			tunDevice.addr6 = addr
+			tunDevice.inet6Address = prefix.Addr()
 			protoAddr.Protocol = ipv6.ProtocolNumber
 		}
 		gErr := ipStack.AddProtocolAddress(tun.DefaultNIC, protoAddr, stack.AddressProperties{})
@@ -71,7 +80,20 @@ func newStackDevice(options DeviceOptions) (*stackDevice, error) {
 	tunDevice.stack = ipStack
 	if options.Handler != nil {
 		ipStack.SetTransportProtocolHandler(tcp.ProtocolNumber, tun.NewTCPForwarder(options.Context, ipStack, options.Handler).HandlePacket)
-		ipStack.SetTransportProtocolHandler(udp.ProtocolNumber, tun.NewUDPForwarder(options.Context, ipStack, options.Handler, options.UDPTimeout).HandlePacket)
+		udpForwarder := tun.NewUDPForwarder(options.Context, ipStack, options.Handler, tun.UDPNatOptions{
+			Timeout:         options.UDPTimeout,
+			Shared:          true,
+			Mapping:         options.UDPMapping,
+			Filtering:       options.UDPFiltering,
+			MaxSize:         options.UDPNATMax,
+			InterfaceFinder: options.InterfaceFinder,
+		})
+		ipStack.SetTransportProtocolHandler(udp.ProtocolNumber, udpForwarder.HandlePacket)
+		tunDevice.udpForwarder = udpForwarder
+		icmpForwarder := tun.NewICMPForwarder(ipStack, options.Handler, options.Logger)
+		ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber4, icmpForwarder.HandlePacket)
+		ipStack.SetTransportProtocolHandler(icmp.ProtocolNumber6, icmpForwarder.HandlePacket)
+		tunDevice.icmpForwarder = icmpForwarder
 	}
 	return tunDevice, nil
 }
@@ -87,11 +109,17 @@ func (w *stackDevice) DialContext(ctx context.Context, network string, destinati
 	}
 	var networkProtocol tcpip.NetworkProtocolNumber
 	if destination.IsIPv4() {
+		if !w.inet4Address.IsValid() {
+			return nil, E.New("missing IPv4 local address")
+		}
 		networkProtocol = header.IPv4ProtocolNumber
-		bind.Addr = w.addr4
+		bind.Addr = tun.AddressFromAddr(w.inet4Address)
 	} else {
+		if !w.inet6Address.IsValid() {
+			return nil, E.New("missing IPv6 local address")
+		}
 		networkProtocol = header.IPv6ProtocolNumber
-		bind.Addr = w.addr6
+		bind.Addr = tun.AddressFromAddr(w.inet6Address)
 	}
 	switch N.NetworkName(network) {
 	case N.NetworkTCP:
@@ -117,11 +145,17 @@ func (w *stackDevice) ListenPacket(ctx context.Context, destination M.Socksaddr)
 	}
 	var networkProtocol tcpip.NetworkProtocolNumber
 	if destination.IsIPv4() {
+		if !w.inet4Address.IsValid() {
+			return nil, E.New("missing IPv4 local address")
+		}
 		networkProtocol = header.IPv4ProtocolNumber
-		bind.Addr = w.addr4
+		bind.Addr = tun.AddressFromAddr(w.inet4Address)
 	} else {
+		if !w.inet6Address.IsValid() {
+			return nil, E.New("missing IPv6 local address")
+		}
 		networkProtocol = header.IPv6ProtocolNumber
-		bind.Addr = w.addr6
+		bind.Addr = tun.AddressFromAddr(w.inet6Address)
 	}
 	udpConn, err := gonet.DialUDP(w.stack, &bind, nil, networkProtocol)
 	if err != nil {
@@ -130,10 +164,24 @@ func (w *stackDevice) ListenPacket(ctx context.Context, destination M.Socksaddr)
 	return udpConn, nil
 }
 
+func (w *stackDevice) Inet4Address() netip.Addr {
+	return w.inet4Address
+}
+
+func (w *stackDevice) Inet6Address() netip.Addr {
+	return w.inet6Address
+}
+
 func (w *stackDevice) SetDevice(device *device.Device) {
 }
 
 func (w *stackDevice) Start() error {
+	if w.udpForwarder != nil {
+		err := w.udpForwarder.Start()
+		if err != nil {
+			return err
+		}
+	}
 	w.events <- wgTun.EventUp
 	return nil
 }
@@ -144,20 +192,24 @@ func (w *stackDevice) File() *os.File {
 
 func (w *stackDevice) Read(bufs [][]byte, sizes []int, offset int) (count int, err error) {
 	select {
-	case packetBuffer, ok := <-w.outbound:
+	case packet, ok := <-w.outbound:
 		if !ok {
 			return 0, os.ErrClosed
 		}
-		defer packetBuffer.DecRef()
-		p := bufs[0]
-		p = p[offset:]
-		n := 0
-		for _, slice := range packetBuffer.AsSlices() {
-			n += copy(p[n:], slice)
+		defer packet.DecRef()
+		var copyN int
+		/*rangeIterate(packet.Data().AsRange(), func(view *buffer.View) {
+			copyN += copy(bufs[0][offset+copyN:], view.AsSlice())
+		})*/
+		for _, view := range packet.AsSlices() {
+			copyN += copy(bufs[0][offset+copyN:], view)
 		}
-		sizes[0] = n
-		count = 1
-		return
+		sizes[0] = copyN
+		return 1, nil
+	case packet := <-w.packetOutbound:
+		defer packet.Release()
+		sizes[0] = copy(bufs[0][offset:], packet.Bytes())
+		return 1, nil
 	case <-w.done:
 		return 0, os.ErrClosed
 	}
@@ -203,13 +255,21 @@ func (w *stackDevice) Events() <-chan wgTun.Event {
 }
 
 func (w *stackDevice) Close() error {
-	close(w.done)
-	close(w.events)
-	w.stack.Close()
-	for _, endpoint := range w.stack.CleanupEndpoints() {
-		endpoint.Abort()
-	}
-	w.stack.Wait()
+	w.closeOnce.Do(func() {
+		close(w.done)
+		close(w.events)
+		if w.icmpForwarder != nil {
+			w.icmpForwarder.Close()
+		}
+		if w.udpForwarder != nil {
+			_ = w.udpForwarder.Close()
+		}
+		w.stack.Close()
+		for _, endpoint := range w.stack.CleanupEndpoints() {
+			endpoint.Abort()
+		}
+		w.stack.Wait()
+	})
 	return nil
 }
 

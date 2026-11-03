@@ -4,6 +4,7 @@ import (
 	"context"
 
 	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter/certificate"
 	"github.com/sagernet/sing-box/adapter/endpoint"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	"github.com/sagernet/sing-box/adapter/outbound"
@@ -20,7 +21,15 @@ import (
 // boxContext registers only protocols needed by the panel dataplane.
 // Avoids pulling naive/v2rayhttp (breaks with newer golang.org/x/net).
 func boxContext(ctx context.Context) context.Context {
-	return box.Context(ctx, inboundRegistry(), outboundRegistry(), endpoint.NewRegistry(), dnsTransportRegistry(), service.NewRegistry())
+	return box.Context(
+		ctx,
+		inboundRegistry(),
+		outboundRegistry(),
+		endpoint.NewRegistry(),
+		dnsTransportRegistry(),
+		service.NewRegistry(),
+		certificate.NewRegistry(),
+	)
 }
 
 func inboundRegistry() *inbound.Registry {

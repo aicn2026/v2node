@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	box "github.com/sagernet/sing-box"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing/common/json/badoption"
@@ -16,125 +17,108 @@ import (
 )
 
 type nodeState struct {
-	info   *panel.NodeInfo
-	users  []panel.UserInfo
-	outTag string // direct or egress-* from panel default_out
+	info     *panel.NodeInfo
+	users    []panel.UserInfo
+	outTag   string // direct or egress-* from panel default_out
+	instance *box.Box
 }
 
-func (e *Engine) buildOptions() (option.Options, error) {
-	e.applyDefaultOutTags()
-
-	var inbounds []option.Inbound
-	var outbounds []option.Outbound
-	var rules []option.Rule
-	seenOut := map[string]bool{"direct": true, "block": true}
-
-	outbounds = append(outbounds,
-		option.Outbound{Type: C.TypeDirect, Tag: "direct", Options: &option.DirectOutboundOptions{}},
-		option.Outbound{Type: C.TypeBlock, Tag: "block", Options: &option.StubOptions{}},
-	)
-
-	var buildErr error
-	e.nodes.Range(func(key, value any) bool {
-		tag := key.(string)
-		st := value.(*nodeState)
-		if st.info == nil {
-			return true
-		}
-		inbound, err := buildInbound(tag, st)
-		if err != nil {
-			buildErr = err
-			return false
-		}
-		inbounds = append(inbounds, inbound)
-
-		outTag := st.outTag
-		if outTag == "" {
-			outTag = "direct"
-		}
-		if outTag != "direct" && !seenOut[outTag] {
-			seenOut[outTag] = true
-		}
-
-		// Block rules MUST come before the catch-all inbound→outbound route
-		// (sing-box uses first-match-wins).
-		if st.info.Common != nil {
-			for _, route := range st.info.Common.Routes {
-				switch route.Action {
-				case "block":
-					if len(route.Match) == 0 {
-						continue
-					}
-					rules = append(rules, option.Rule{
-						Type: C.RuleTypeDefault,
-						DefaultOptions: option.DefaultRule{
-							RawDefaultRule: option.RawDefaultRule{
-								Inbound: badoption.Listable[string]{tag},
-								Domain:  badoption.Listable[string](route.Match),
-							},
-							RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
-						},
-					})
-				case "block_ip":
-					if len(route.Match) == 0 {
-						continue
-					}
-					rules = append(rules, option.Rule{
-						Type: C.RuleTypeDefault,
-						DefaultOptions: option.DefaultRule{
-							RawDefaultRule: option.RawDefaultRule{
-								Inbound: badoption.Listable[string]{tag},
-								IPCIDR:  badoption.Listable[string](route.Match),
-							},
-							RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
-						},
-					})
-				case "block_port":
-					ports := parsePorts(strings.Join(route.Match, ","))
-					if len(ports) == 0 {
-						continue
-					}
-					rules = append(rules, option.Rule{
-						Type: C.RuleTypeDefault,
-						DefaultOptions: option.DefaultRule{
-							RawDefaultRule: option.RawDefaultRule{
-								Inbound: badoption.Listable[string]{tag},
-								Port:    badoption.Listable[uint16](ports),
-							},
-							RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
-						},
-					})
-				}
-			}
-		}
-
-		rules = append(rules, option.Rule{
-			Type: C.RuleTypeDefault,
-			DefaultOptions: option.DefaultRule{
-				RawDefaultRule: option.RawDefaultRule{
-					Inbound: badoption.Listable[string]{tag},
-				},
-				RuleAction: option.RuleAction{
-					Action: C.RuleActionTypeRoute,
-					RouteOptions: option.RouteActionOptions{
-						Outbound: outTag,
-					},
-				},
-			},
-		})
-		return true
-	})
-	if buildErr != nil {
-		return option.Options{}, buildErr
+func (e *Engine) buildNodeOptions(tag string, st *nodeState) (option.Options, error) {
+	if st == nil || st.info == nil {
+		return option.Options{}, fmt.Errorf("node %s missing info", tag)
 	}
 
-	outbounds = append(outbounds, e.extraOutbounds...)
+	extraOut := applyNodeOutTag(tag, st)
+
+	inbound, err := buildInbound(tag, st)
+	if err != nil {
+		return option.Options{}, err
+	}
+
+	outbounds := []option.Outbound{
+		{Type: C.TypeDirect, Tag: "direct", Options: &option.DirectOutboundOptions{}},
+		{Type: C.TypeBlock, Tag: "block", Options: &option.StubOptions{}},
+	}
+	outbounds = append(outbounds, extraOut...)
+
+	outTag := st.outTag
+	if outTag == "" {
+		outTag = "direct"
+	}
+
+	var rules []option.Rule
+	// Block rules MUST come before the catch-all inbound→outbound route
+	// (sing-box uses first-match-wins).
+	if st.info.Common != nil {
+		for _, route := range st.info.Common.Routes {
+			switch route.Action {
+			case "block":
+				if len(route.Match) == 0 {
+					continue
+				}
+				rules = append(rules, option.Rule{
+					Type: C.RuleTypeDefault,
+					DefaultOptions: option.DefaultRule{
+						RawDefaultRule: option.RawDefaultRule{
+							Inbound: badoption.Listable[string]{tag},
+							Domain:  badoption.Listable[string](route.Match),
+						},
+						RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
+					},
+				})
+			case "block_ip":
+				if len(route.Match) == 0 {
+					continue
+				}
+				rules = append(rules, option.Rule{
+					Type: C.RuleTypeDefault,
+					DefaultOptions: option.DefaultRule{
+						RawDefaultRule: option.RawDefaultRule{
+							Inbound: badoption.Listable[string]{tag},
+							IPCIDR:  badoption.Listable[string](route.Match),
+						},
+						RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
+					},
+				})
+			case "block_port":
+				ports := parsePorts(strings.Join(route.Match, ","))
+				if len(ports) == 0 {
+					continue
+				}
+				rules = append(rules, option.Rule{
+					Type: C.RuleTypeDefault,
+					DefaultOptions: option.DefaultRule{
+						RawDefaultRule: option.RawDefaultRule{
+							Inbound: badoption.Listable[string]{tag},
+							Port:    badoption.Listable[uint16](ports),
+						},
+						RuleAction: option.RuleAction{Action: C.RuleActionTypeReject},
+					},
+				})
+			}
+		}
+	}
+
+	rules = append(rules, option.Rule{
+		Type: C.RuleTypeDefault,
+		DefaultOptions: option.DefaultRule{
+			RawDefaultRule: option.RawDefaultRule{
+				Inbound: badoption.Listable[string]{tag},
+			},
+			RuleAction: option.RuleAction{
+				Action: C.RuleActionTypeRoute,
+				RouteOptions: option.RouteActionOptions{
+					Outbound: outTag,
+				},
+			},
+		},
+	})
 
 	return option.Options{
 		Log: &option.LogOptions{
 			Level: e.logLevel(),
 		},
-		Inbounds:  inbounds,
+		Inbounds:  []option.Inbound{inbound},
 		Outbounds: outbounds,
 		Route: &option.RouteOptions{
 			Rules: rules,
@@ -150,75 +134,71 @@ func (e *Engine) logLevel() string {
 	return "info"
 }
 
-// applyDefaultOutTags parses panel default_out (Xray freedom JSON) into sing-box
+// applyNodeOutTag parses panel default_out (Xray freedom JSON) into sing-box
 // direct outbounds with inet4/6_bind_address — same multi-IP egress semantics as Xray.
-func (e *Engine) applyDefaultOutTags() {
-	e.extraOutbounds = nil
+func applyNodeOutTag(tag string, st *nodeState) []option.Outbound {
+	st.outTag = "direct"
+	if st.info == nil || st.info.Common == nil {
+		return nil
+	}
+	var extra []option.Outbound
 	seen := map[string]bool{}
-	e.nodes.Range(func(key, value any) bool {
-		tag := key.(string)
-		st := value.(*nodeState)
-		if st.info == nil || st.info.Common == nil {
-			return true
+	for _, route := range st.info.Common.Routes {
+		if route.Action != "default_out" || route.ActionValue == nil {
+			continue
 		}
-		st.outTag = "direct"
-		for _, route := range st.info.Common.Routes {
-			if route.Action != "default_out" || route.ActionValue == nil {
-				continue
-			}
-			var xf struct {
-				Tag            string `json:"tag"`
-				SendThrough    string `json:"sendThrough"`
-				StreamSettings *struct {
-					Sockopt *struct {
-						DomainStrategy string `json:"domainStrategy"`
-					} `json:"sockopt"`
-				} `json:"streamSettings"`
-				Settings *struct {
+		var xf struct {
+			Tag            string `json:"tag"`
+			SendThrough    string `json:"sendThrough"`
+			StreamSettings *struct {
+				Sockopt *struct {
 					DomainStrategy string `json:"domainStrategy"`
-				} `json:"settings"`
-			}
-			if err := json.Unmarshal([]byte(*route.ActionValue), &xf); err != nil {
-				continue
-			}
-			outTag := xf.Tag
-			if outTag == "" {
-				outTag = "egress-" + tag
-			}
-			st.outTag = outTag
-			if seen[outTag] {
-				continue
-			}
-			seen[outTag] = true
-			dopts := &option.DirectOutboundOptions{}
-			if xf.SendThrough != "" {
-				if addr, err := netip.ParseAddr(xf.SendThrough); err == nil {
-					a := badoption.Addr(addr)
-					if addr.Is4() {
-						dopts.Inet4BindAddress = &a
-					} else {
-						dopts.Inet6BindAddress = &a
-					}
+				} `json:"sockopt"`
+			} `json:"streamSettings"`
+			Settings *struct {
+				DomainStrategy string `json:"domainStrategy"`
+			} `json:"settings"`
+		}
+		if err := json.Unmarshal([]byte(*route.ActionValue), &xf); err != nil {
+			continue
+		}
+		outTag := xf.Tag
+		if outTag == "" {
+			outTag = "egress-" + tag
+		}
+		st.outTag = outTag
+		if seen[outTag] || outTag == "direct" {
+			continue
+		}
+		seen[outTag] = true
+		dopts := &option.DirectOutboundOptions{}
+		if xf.SendThrough != "" {
+			if addr, err := netip.ParseAddr(xf.SendThrough); err == nil {
+				a := badoption.Addr(addr)
+				if addr.Is4() {
+					dopts.Inet4BindAddress = &a
+				} else {
+					dopts.Inet6BindAddress = &a
 				}
 			}
-			ds := ""
-			if xf.StreamSettings != nil && xf.StreamSettings.Sockopt != nil {
-				ds = xf.StreamSettings.Sockopt.DomainStrategy
-			}
-			if ds == "" && xf.Settings != nil {
-				ds = xf.Settings.DomainStrategy
-			}
-			if mapped := mapDomainStrategy(ds); mapped != 0 {
-				dopts.DomainStrategy = mapped
-			}
-			e.extraOutbounds = append(e.extraOutbounds, option.Outbound{
-				Type:    C.TypeDirect,
-				Tag:     outTag,
-				Options: dopts,
-			})
 		}
-		return true
-	})
+		ds := ""
+		if xf.StreamSettings != nil && xf.StreamSettings.Sockopt != nil {
+			ds = xf.StreamSettings.Sockopt.DomainStrategy
+		}
+		if ds == "" && xf.Settings != nil {
+			ds = xf.Settings.DomainStrategy
+		}
+		if mapped := mapDomainStrategy(ds); mapped != 0 {
+			dopts.DomainStrategy = mapped
+		}
+		extra = append(extra, option.Outbound{
+			Type:    C.TypeDirect,
+			Tag:     outTag,
+			Options: dopts,
+		})
+	}
+	return extra
 }
 
 func mapDomainStrategy(s string) option.DomainStrategy {

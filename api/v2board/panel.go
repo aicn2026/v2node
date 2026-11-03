@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/sirupsen/logrus"
@@ -33,6 +34,7 @@ func New(c *conf.NodeConfig) (*Client, error) {
 		retryCount = *c.RetryCount
 	}
 	client.SetRetryCount(retryCount)
+	client.SetLogger(&restyPanelLogger{})
 	client.SetHeader("User-Agent", fmt.Sprintf("v2node go-resty/%s (https://github.com/go-resty/resty)", resty.Version))
 	if c.Timeout > 0 {
 		client.SetTimeout(time.Duration(c.Timeout) * time.Second)
@@ -42,8 +44,11 @@ func New(c *conf.NodeConfig) (*Client, error) {
 	client.OnError(func(req *resty.Request, err error) {
 		var v *resty.ResponseError
 		if errors.As(err, &v) {
-			// v.Response contains the last response from the server
-			// v.Err contains the original error
+			// Transient panel/network failures are expected; keep journal quiet.
+			if isTransientPanelError(v.Err) {
+				logrus.Debug(v.Err)
+				return
+			}
 			logrus.Error(v.Err)
 		}
 	})
@@ -62,4 +67,44 @@ func New(c *conf.NodeConfig) (*Client, error) {
 		UserList: &UserListBody{},
 		AliveMap: &AliveMap{},
 	}, nil
+}
+
+func isTransientPanelError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "timeout") ||
+		strings.Contains(msg, "deadline exceeded") ||
+		strings.Contains(msg, "connection reset") ||
+		strings.Contains(msg, "broken pipe") ||
+		strings.Contains(msg, "connection refused") ||
+		strings.Contains(msg, "TLS handshake timeout") ||
+		strings.Contains(msg, "i/o timeout") ||
+		strings.Contains(msg, "EOF")
+}
+
+// restyPanelLogger demotes transient panel API noise to debug.
+type restyPanelLogger struct{}
+
+func (l *restyPanelLogger) Errorf(format string, v ...interface{}) {
+	msg := fmt.Sprintf(format, v...)
+	if isTransientPanelError(errors.New(msg)) {
+		logrus.Debug(msg)
+		return
+	}
+	logrus.Error(msg)
+}
+
+func (l *restyPanelLogger) Warnf(format string, v ...interface{}) {
+	msg := fmt.Sprintf(format, v...)
+	if isTransientPanelError(errors.New(msg)) {
+		logrus.Debug(msg)
+		return
+	}
+	logrus.Warn(msg)
+}
+
+func (l *restyPanelLogger) Debugf(format string, v ...interface{}) {
+	logrus.Debugf(format, v...)
 }

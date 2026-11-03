@@ -96,18 +96,103 @@ func (c *Controller) Start(x *core.V2Core) error {
 // Close implement the Close() function of the service interface
 func (c *Controller) Close() error {
 	limiter.DeleteLimiter(c.tag)
-	if c.nodeInfoMonitorPeriodic != nil {
-		c.nodeInfoMonitorPeriodic.Close()
-	}
-	if c.userReportPeriodic != nil {
-		c.userReportPeriodic.Close()
-	}
-	if c.renewCertPeriodic != nil {
-		c.renewCertPeriodic.Close()
-	}
+	c.stopTasks()
 	err := c.server.DelNode(c.tag)
 	if err != nil {
 		return fmt.Errorf("del node error: %s", err)
 	}
+	return nil
+}
+
+func (c *Controller) stopTasks() {
+	if c.nodeInfoMonitorPeriodic != nil {
+		c.nodeInfoMonitorPeriodic.Close()
+		c.nodeInfoMonitorPeriodic = nil
+	}
+	if c.userReportPeriodic != nil {
+		c.userReportPeriodic.Close()
+		c.userReportPeriodic = nil
+	}
+	if c.renewCertPeriodic != nil {
+		c.renewCertPeriodic.Close()
+		c.renewCertPeriodic = nil
+	}
+}
+
+// hotReloadNode applies panel node config changes to this node only.
+// Other nodes keep their sing-box instance and active connections.
+// On failure it restores the previous node so siblings are not taken down.
+func (c *Controller) hotReloadNode(newN *panel.NodeInfo) error {
+	if newN == nil {
+		return fmt.Errorf("nil node info")
+	}
+	oldTag := c.tag
+	oldInfo := c.info
+	oldUsers := c.userList
+	oldAlive := c.aliveMap
+
+	// Pause periodic tasks for this controller; restart after swap.
+	c.stopTasks()
+
+	restore := func(cause error) error {
+		c.tag = oldTag
+		c.info = oldInfo
+		c.userList = oldUsers
+		c.aliveMap = oldAlive
+		if newN.Tag != "" && newN.Tag != oldTag {
+			_ = c.server.DelNode(newN.Tag)
+		}
+		limiter.DeleteLimiter(newN.Tag)
+		limiter.DeleteLimiter(oldTag)
+		if oldInfo != nil {
+			c.limiter = limiter.AddLimiter(oldInfo.Type, oldTag, oldUsers, oldAlive)
+			if err := c.server.AddNode(oldTag, oldInfo); err != nil {
+				return fmt.Errorf("%v (also restore old node failed: %w)", cause, err)
+			}
+			if _, err := c.server.AddUsers(&core.AddUsersParams{
+				Tag:      oldTag,
+				Users:    oldUsers,
+				NodeInfo: oldInfo,
+			}); err != nil {
+				return fmt.Errorf("%v (also restore old users failed: %w)", cause, err)
+			}
+		}
+		return cause
+	}
+
+	c.info = newN
+	if newN.Security == panel.Tls {
+		if err := c.requestCert(); err != nil {
+			c.info = oldInfo
+			return restore(fmt.Errorf("request cert error: %s", err))
+		}
+	}
+
+	limiter.DeleteLimiter(oldTag)
+
+	if oldTag != newN.Tag {
+		if err := c.server.DelNode(oldTag); err != nil {
+			return restore(fmt.Errorf("del old node %s: %s", oldTag, err))
+		}
+	}
+
+	c.tag = newN.Tag
+	c.limiter = limiter.AddLimiter(c.info.Type, c.tag, c.userList, c.aliveMap)
+
+	if err := c.server.AddNode(c.tag, newN); err != nil {
+		return restore(fmt.Errorf("add node error: %s", err))
+	}
+	added, err := c.server.AddUsers(&core.AddUsersParams{
+		Tag:      c.tag,
+		Users:    c.userList,
+		NodeInfo: newN,
+	})
+	if err != nil {
+		_ = c.server.DelNode(c.tag)
+		return restore(fmt.Errorf("add users error: %s", err))
+	}
+	log.WithField("tag", c.tag).Infof("Hot reloaded node (%d users), replaced %s", added, oldTag)
+	// Tasks are restarted by nodeInfoMonitor after this call returns,
+	// so we do not start a second monitor while the current one is still running.
 	return nil
 }

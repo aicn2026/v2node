@@ -34,8 +34,8 @@ func (c *Conn) Write(b []byte) (n int, err error) {
 	return n, err
 }
 
-// NewDualDynamicConnRateLimiter caps upload (Read) and download (Write) independently.
-// For an inbound client conn: Read=user upload, Write=user download.
+// NewDualDynamicConnRateLimiter is the v0.1.5 logic: independent up/down buckets,
+// Wait after Read/Write using actual transferred bytes.
 func NewDualDynamicConnRateLimiter(c net.Conn, lim *DualLimiter) net.Conn {
 	if lim == nil {
 		return c
@@ -43,7 +43,6 @@ func NewDualDynamicConnRateLimiter(c net.Conn, lim *DualLimiter) net.Conn {
 	return &DynamicConn{Conn: c, up: lim.Up, down: lim.Down}
 }
 
-// Deprecated alias kept for call sites that still pass a single bucket.
 func NewDynamicConnRateLimiter(c net.Conn, l *DynamicBucket) net.Conn {
 	if l == nil {
 		return c

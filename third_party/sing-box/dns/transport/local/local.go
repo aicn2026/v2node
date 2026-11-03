@@ -2,33 +2,47 @@ package local
 
 import (
 	"context"
-	"errors"
-	"math/rand"
-	"syscall"
-	"time"
+	"sync"
+	"sync/atomic"
 
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
-	"github.com/sagernet/sing-box/dns/transport"
-	"github.com/sagernet/sing-box/dns/transport/hosts"
+	"github.com/sagernet/sing-box/dns/transport/local/systemconfig"
+	"github.com/sagernet/sing-box/dns/transport/mdns"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
-	"github.com/sagernet/sing/common/buf"
 	E "github.com/sagernet/sing/common/exceptions"
-	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/common/logger"
 	N "github.com/sagernet/sing/common/network"
 
 	mDNS "github.com/miekg/dns"
 )
 
-var _ adapter.DNSTransport = (*Transport)(nil)
+func RegisterTransport(registry *dns.TransportRegistry) {
+	dns.RegisterTransport[option.LocalDNSServerOptions](registry, C.DNSTypeLocal, NewTransport)
+}
+
+var (
+	_ adapter.DNSTransport                    = (*Transport)(nil)
+	_ adapter.DNSTransportWithPreferredDomain = (*Transport)(nil)
+	_ adapter.DNSTransportWithEnvironment     = (*Transport)(nil)
+)
 
 type Transport struct {
 	dns.TransportAdapter
-	ctx    context.Context
-	hosts  *hosts.File
-	dialer N.Dialer
+	ctx               context.Context
+	logger            logger.ContextLogger
+	preferredResolver *PreferredDomainResolver
+	dialer            N.Dialer
+	preferGo          bool
+	resolved          ResolvedResolver
+	mdnsTransport     adapter.DNSTransport
+	mdnsScope         *adapter.Scope
+	configSource      *systemconfig.Source
+	system            systemResolver
+	serverSet         atomic.Pointer[localServerSet]
+	serverSetAccess   sync.Mutex
 }
 
 func NewTransport(ctx context.Context, logger log.ContextLogger, tag string, options option.LocalDNSServerOptions) (adapter.DNSTransport, error) {
@@ -36,198 +50,130 @@ func NewTransport(ctx context.Context, logger log.ContextLogger, tag string, opt
 	if err != nil {
 		return nil, err
 	}
+	preferredResolver, err := NewPreferredDomainResolver(ctx, logger, options)
+	if err != nil {
+		return nil, err
+	}
 	return &Transport{
-		TransportAdapter: dns.NewTransportAdapterWithLocalOptions(C.DNSTypeLocal, tag, options),
-		ctx:              ctx,
-		hosts:            hosts.NewFile(hosts.DefaultPath),
-		dialer:           transportDialer,
+		TransportAdapter:  dns.NewTransportAdapterWithLocalOptions(C.DNSTypeLocal, tag, options),
+		ctx:               ctx,
+		logger:            logger,
+		preferredResolver: preferredResolver,
+		dialer:            transportDialer,
+		preferGo:          options.PreferGo,
+		configSource:      systemconfig.NewSource(ctx),
 	}, nil
 }
 
-func (t *Transport) Start(stage adapter.StartStage) error {
+func (t *Transport) Start(stage adapter.StartStage, scope *adapter.Scope) error {
+	t.preferredResolver.Start(stage)
+	switch stage {
+	case adapter.StartStateInitialize:
+		scope.Add(t.configSource.Close)
+		if !t.preferGo {
+			resolvedResolver, err := NewResolvedResolver(t.ctx, t.logger)
+			if err == nil {
+				scope.Add(resolvedResolver.Close)
+				err = resolvedResolver.Start()
+				if err == nil {
+					t.resolved = resolvedResolver
+				} else {
+					t.logger.Warn(E.Cause(err, "initialize resolved resolver"))
+				}
+			}
+		}
+	case adapter.StartStateStart:
+		scope.Add(func() error {
+			t.system.close()
+			return nil
+		})
+		scope.Add(func() error {
+			serverSet := t.serverSet.Swap(nil)
+			if serverSet != nil {
+				return serverSet.serverScope.Close()
+			}
+			return nil
+		})
+		if !C.IsDarwin {
+			t.mdnsTransport = mdns.NewRawTransport(t.TransportAdapter, t.ctx, t.logger)
+			t.mdnsScope = adapter.NewScope(t.ctx, t.logger)
+			scope.Add(t.mdnsScope.Close)
+		}
+		fallthrough
+	default:
+		if t.mdnsTransport != nil {
+			err := t.mdnsTransport.Start(stage, t.mdnsScope)
+			if err != nil {
+				return err
+			}
+		}
+	}
 	return nil
 }
 
-func (t *Transport) Close() error {
-	return nil
+func (t *Transport) Reset() {
+	serverSet := t.serverSet.Load()
+	if serverSet != nil {
+		for _, serverTransport := range serverSet.transports {
+			serverTransport.Reset()
+		}
+	}
+	t.system.reset()
+	t.configSource.Reset()
+	if t.resolved != nil {
+		t.resolved.Reset()
+	}
+	if t.mdnsTransport != nil {
+		t.mdnsTransport.Reset()
+	}
+}
+
+func (t *Transport) PreferredDomain(domain string) bool {
+	return t.preferredResolver.PreferredDomain(domain)
+}
+
+func (t *Transport) Environment() []string {
+	systemConfig := t.configSource.Configuration()
+	if t.resolved != nil && systemConfig.SystemdResolved {
+		return t.resolved.Environment()
+	}
+	return systemConfig.Signature()
 }
 
 func (t *Transport) Exchange(ctx context.Context, message *mDNS.Msg) (*mDNS.Msg, error) {
-	question := message.Question[0]
-	if question.Qtype == mDNS.TypeA || question.Qtype == mDNS.TypeAAAA {
-		addresses := t.hosts.Lookup(dns.FqdnToDomain(question.Name))
-		if len(addresses) > 0 {
-			return dns.FixedResponse(message.Id, question, addresses, C.DefaultDNSTTL), nil
-		}
-	}
-	systemConfig := getSystemDNSConfig(t.ctx)
-	if systemConfig.singleRequest || !(message.Question[0].Qtype == mDNS.TypeA || message.Question[0].Qtype == mDNS.TypeAAAA) {
-		return t.exchangeSingleRequest(ctx, systemConfig, message, question.Name)
-	} else {
-		return t.exchangeParallel(ctx, systemConfig, message, question.Name)
-	}
-}
-
-func (t *Transport) exchangeSingleRequest(ctx context.Context, systemConfig *dnsConfig, message *mDNS.Msg, domain string) (*mDNS.Msg, error) {
-	var lastErr error
-	for _, fqdn := range systemConfig.nameList(domain) {
-		response, err := t.tryOneName(ctx, systemConfig, fqdn, message)
-		if err != nil {
-			lastErr = err
-			continue
-		}
-		return response, nil
-	}
-	return nil, lastErr
-}
-
-func (t *Transport) exchangeParallel(ctx context.Context, systemConfig *dnsConfig, message *mDNS.Msg, domain string) (*mDNS.Msg, error) {
-	returned := make(chan struct{})
-	defer close(returned)
-	type queryResult struct {
+	done := make(chan struct{})
+	var (
 		response *mDNS.Msg
 		err      error
-	}
-	results := make(chan queryResult)
-	startRacer := func(ctx context.Context, fqdn string) {
-		response, err := t.tryOneName(ctx, systemConfig, fqdn, message)
-		if err == nil {
-			if response.Rcode != mDNS.RcodeSuccess {
-				err = dns.RcodeError(response.Rcode)
-			} else if len(dns.MessageToAddresses(response)) == 0 {
-				err = dns.RcodeSuccess
-			}
-		}
-		select {
-		case results <- queryResult{response, err}:
-		case <-returned:
-		}
-	}
-	queryCtx, queryCancel := context.WithCancel(ctx)
-	defer queryCancel()
-	var nameCount int
-	for _, fqdn := range systemConfig.nameList(domain) {
-		nameCount++
-		go startRacer(queryCtx, fqdn)
-	}
-	var errors []error
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case result := <-results:
-			if result.err == nil {
-				return result.response, nil
-			}
-			errors = append(errors, result.err)
-			if len(errors) == nameCount {
-				return nil, E.Errors(errors...)
-			}
-		}
-	}
+	)
+	t.ExchangeAsync(ctx, message, func(callbackResponse *mDNS.Msg, callbackErr error) {
+		response = callbackResponse
+		err = callbackErr
+		close(done)
+	})
+	<-done
+	return response, err
 }
 
-func (t *Transport) tryOneName(ctx context.Context, config *dnsConfig, fqdn string, message *mDNS.Msg) (*mDNS.Msg, error) {
-	serverOffset := config.serverOffset()
-	sLen := uint32(len(config.servers))
-	var lastErr error
-	for i := 0; i < config.attempts; i++ {
-		for j := uint32(0); j < sLen; j++ {
-			server := config.servers[(serverOffset+j)%sLen]
-			question := message.Question[0]
-			question.Name = fqdn
-			response, err := t.exchangeOne(ctx, M.ParseSocksaddr(server), question, config.timeout, config.useTCP, config.trustAD)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			return response, nil
+func (t *Transport) ExchangeAsync(ctx context.Context, message *mDNS.Msg, callback func(response *mDNS.Msg, err error)) {
+	question := message.Question[0]
+	response := t.preferredResolver.Lookup(message)
+	if response != nil {
+		callback(response, nil)
+		return
+	}
+	if mdns.IsLocalDomain(question.Name) {
+		if C.IsDarwin {
+			t.systemExchangeAsync(ctx, message, callback)
+			return
 		}
+		t.mdnsTransport.ExchangeAsync(ctx, message, callback)
+		return
 	}
-	return nil, E.Cause(lastErr, fqdn)
-}
-
-func (t *Transport) exchangeOne(ctx context.Context, server M.Socksaddr, question mDNS.Question, timeout time.Duration, useTCP, ad bool) (*mDNS.Msg, error) {
-	if server.Port == 0 {
-		server.Port = 53
+	systemConfig := t.configSource.Configuration()
+	if t.resolved != nil && systemConfig.SystemdResolved {
+		t.resolved.ExchangeAsync(ctx, message, callback)
+		return
 	}
-	request := &mDNS.Msg{
-		MsgHdr: mDNS.MsgHdr{
-			Id:                uint16(rand.Uint32()),
-			RecursionDesired:  true,
-			AuthenticatedData: ad,
-		},
-		Question: []mDNS.Question{question},
-		Compress: true,
-	}
-	request.SetEdns0(buf.UDPBufferSize, false)
-	if !useTCP {
-		return t.exchangeUDP(ctx, server, request, timeout)
-	} else {
-		return t.exchangeTCP(ctx, server, request, timeout)
-	}
-}
-
-func (t *Transport) exchangeUDP(ctx context.Context, server M.Socksaddr, request *mDNS.Msg, timeout time.Duration) (*mDNS.Msg, error) {
-	conn, err := t.dialer.DialContext(ctx, N.NetworkUDP, server)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	if deadline, loaded := ctx.Deadline(); loaded && !deadline.IsZero() {
-		newDeadline := time.Now().Add(timeout)
-		if deadline.After(newDeadline) {
-			deadline = newDeadline
-		}
-		conn.SetDeadline(deadline)
-	}
-	buffer := buf.Get(buf.UDPBufferSize)
-	defer buf.Put(buffer)
-	rawMessage, err := request.PackBuffer(buffer)
-	if err != nil {
-		return nil, E.Cause(err, "pack request")
-	}
-	_, err = conn.Write(rawMessage)
-	if err != nil {
-		if errors.Is(err, syscall.EMSGSIZE) {
-			return t.exchangeTCP(ctx, server, request, timeout)
-		}
-		return nil, E.Cause(err, "write request")
-	}
-	n, err := conn.Read(buffer)
-	if err != nil {
-		if errors.Is(err, syscall.EMSGSIZE) {
-			return t.exchangeTCP(ctx, server, request, timeout)
-		}
-		return nil, E.Cause(err, "read response")
-	}
-	var response mDNS.Msg
-	err = response.Unpack(buffer[:n])
-	if err != nil {
-		return nil, E.Cause(err, "unpack response")
-	}
-	if response.Truncated {
-		return t.exchangeTCP(ctx, server, request, timeout)
-	}
-	return &response, nil
-}
-
-func (t *Transport) exchangeTCP(ctx context.Context, server M.Socksaddr, request *mDNS.Msg, timeout time.Duration) (*mDNS.Msg, error) {
-	conn, err := t.dialer.DialContext(ctx, N.NetworkTCP, server)
-	if err != nil {
-		return nil, err
-	}
-	defer conn.Close()
-	if deadline, loaded := ctx.Deadline(); loaded && !deadline.IsZero() {
-		newDeadline := time.Now().Add(timeout)
-		if deadline.After(newDeadline) {
-			deadline = newDeadline
-		}
-		conn.SetDeadline(deadline)
-	}
-	err = transport.WriteMessage(conn, 0, request)
-	if err != nil {
-		return nil, err
-	}
-	return transport.ReadMessage(conn)
+	t.exchangeAsync(ctx, message, systemConfig, question.Name, callback)
 }

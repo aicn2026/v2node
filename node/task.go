@@ -61,20 +61,24 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 		}).Error("Get node info failed")
 		return nil
 	}
+	hotReloaded := false
 	if newN != nil {
-		log.WithFields(log.Fields{
-			"tag": c.tag,
-		}).Error("Got new node info, reload")
-		if c.server.ReloadCh != nil {
-			select {
-			case c.server.ReloadCh <- struct{}{}:
-			default:
-			}
-		} else {
-			log.Panic("Reload failed")
+		log.WithField("tag", c.tag).Infof("Got new node info, hot reload node (old=%s new=%s)", c.tag, newN.Tag)
+		if err := c.hotReloadNode(newN); err != nil {
+			log.WithFields(log.Fields{
+				"tag": c.tag,
+				"err": err,
+			}).Error("Hot reload node failed; kept/restored previous node (no full reload)")
+			// Restart tasks for the restored/previous node. Do NOT full-reload:
+			// that would drop sibling nodes and can panic the process if the
+			// new config is invalid (e.g. missing build tags).
+			c.startTasks(c.info)
+			return nil
 		}
+		hotReloaded = true
+	} else {
+		log.WithField("tag", c.tag).Debug("Node info no change")
 	}
-	log.WithField("tag", c.tag).Debug("Node info no change")
 
 	// get user info
 	newU, err := c.apiClient.GetUserList(ctx)
@@ -86,6 +90,9 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 			"tag": c.tag,
 			"err": err,
 		}).Error("Get user list failed")
+		if hotReloaded {
+			c.startTasks(c.info)
+		}
 		return nil
 	}
 	// get user alive
@@ -98,6 +105,9 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 			"tag": c.tag,
 			"err": err,
 		}).Error("Get alive list failed")
+		if hotReloaded {
+			c.startTasks(c.info)
+		}
 		return nil
 	}
 
@@ -108,6 +118,9 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 	// node no changed, check users
 	if len(newU) == 0 {
 		log.WithField("tag", c.tag).Debug("User list no change")
+		if hotReloaded {
+			c.startTasks(c.info)
+		}
 		return nil
 	}
 	deleted, added, modified := compareUserList(c.userList, newU)
@@ -119,6 +132,9 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 				"tag": c.tag,
 				"err": err,
 			}).Error("Delete users failed")
+			if hotReloaded {
+				c.startTasks(c.info)
+			}
 			return nil
 		}
 	}
@@ -134,6 +150,9 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 				"tag": c.tag,
 				"err": err,
 			}).Error("Add users failed")
+			if hotReloaded {
+				c.startTasks(c.info)
+			}
 			return nil
 		}
 	}
@@ -143,5 +162,8 @@ func (c *Controller) nodeInfoMonitor(ctx context.Context) (err error) {
 	}
 	c.userList = newU
 	log.WithField("tag", c.tag).Infof("%d user deleted, %d user added, %d user modified", len(deleted), len(added), len(modified))
+	if hotReloaded {
+		c.startTasks(c.info)
+	}
 	return nil
 }
