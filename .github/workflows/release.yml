@@ -2,6 +2,11 @@ name: Build and Release
 
 on:
   workflow_dispatch:
+    inputs:
+      version:
+        description: "Version string embedded via ldflags (e.g. v0.1.12-singbox). Defaults to commit SHA if empty."
+        required: false
+        type: string
   push:
     branches:
       - master
@@ -113,8 +118,16 @@ jobs:
         if: ${{ github.event_name == 'release' }}
         run: |
           echo "version=$(echo $GITHUB_REF | cut -d / -f 3)" >> $GITHUB_ENV
+      - name: Get workflow_dispatch version
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            echo "version=${{ github.event.inputs.version }}" >> $GITHUB_ENV
+          else
+            echo "version=${{ github.sha }}" >> $GITHUB_ENV
+          fi
       - name: Get other version
-        if: ${{ github.event_name != 'release' }}
+        if: ${{ github.event_name != 'release' && github.event_name != 'workflow_dispatch' }}
         run: |
           echo "version=${{ github.sha }}" >> $GITHUB_ENV
       - name: Build v2node
