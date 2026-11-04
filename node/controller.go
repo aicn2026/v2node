@@ -2,7 +2,6 @@ package node
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	log "github.com/sirupsen/logrus"
@@ -56,8 +55,10 @@ func (c *Controller) Start(x *core.V2Core) error {
 	if err != nil {
 		return fmt.Errorf("get user list error: %s", err)
 	}
+	// Allow empty user list so the node can come up before any customers are assigned.
+	// Periodic sync (nodeInfoMonitor) still ignores empty pulls to avoid wiping users on a flaky panel response.
 	if len(c.userList) == 0 {
-		return errors.New("add users error: not have any user")
+		log.WithField("tag", node.Tag).Info("No users assigned yet; starting node with empty user list")
 	}
 	c.aliveMap, err = c.apiClient.GetUserAlive(context.Background())
 	if err != nil {
