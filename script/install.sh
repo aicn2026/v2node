@@ -302,13 +302,13 @@ install_v2node() {
     cd /usr/local/v2node/
 
     if  [[ -z "$version_param" ]] ; then
-        last_version=$(curl -Ls "https://api.github.com/repos/aicn2026/v2node/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
+        last_version=$(curl -Ls "https://api.github.com/repos/mouren1988/v2node/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
         if [[ ! -n "$last_version" ]]; then
             echo -e "${red}检测 v2node 版本失败，可能是超出 Github API 限制，请稍后再试，或手动指定 v2node 版本安装${plain}"
             exit 1
         fi
         echo -e "${green}检测到最新版本：${last_version}，开始安装...${plain}"
-        url="https://github.com/aicn2026/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
+        url="https://github.com/mouren1988/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
         curl -sL "$url" | pv -s 30M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 v2node 失败，请确保你的服务器能够下载 Github 的文件${plain}"
@@ -316,7 +316,7 @@ install_v2node() {
         fi
     else
         last_version="v${version_param#v}"
-        url="https://github.com/aicn2026/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
+        url="https://github.com/mouren1988/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
         curl -sL "$url" | pv -s 30M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 v2node $1 失败，请确保此版本存在${plain}"
@@ -410,7 +410,7 @@ EOF
     fi
 
 
-    curl -o /usr/bin/v2node -Ls https://raw.githubusercontent.com/aicn2026/v2node/feat/singbox-dataplane/script/v2node.sh
+    curl -o /usr/bin/v2node -Ls https://raw.githubusercontent.com/mouren1988/v2node/feat/singbox-dataplane/script/v2node.sh
     chmod +x /usr/bin/v2node
 
     cd $cur_dir
