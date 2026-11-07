@@ -281,3 +281,5 @@ require (
 )
 
 replace github.com/sagernet/sing-box => ./third_party/sing-box
+
+replace github.com/sagernet/sing-quic => ./third_party/sing-quic

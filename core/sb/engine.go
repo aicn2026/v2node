@@ -236,8 +236,9 @@ func (e *Engine) rebuildNodeLocked(tag string, st *nodeState) error {
 	}
 	ctx := boxContext(context.Background())
 	instance, err := box.New(box.Options{
-		Context: ctx,
-		Options: opts,
+		Context:          ctx,
+		Options:          opts,
+		DefaultLogWriter: newNodeLogWriter(tag),
 	})
 	if err != nil {
 		return fmt.Errorf("create sing-box for %s: %w", tag, err)

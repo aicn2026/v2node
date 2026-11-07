@@ -63,7 +63,7 @@ func (t *trafficTracker) RoutedConnection(_ context.Context, conn net.Conn, meta
 	}
 	lim, reject := t.applyLimit(user, metadata.Inbound, sourceIP(metadata), true)
 	if reject {
-		log.Infof("Limited %s by conn or ip", user)
+		log.Infof("Limited %s by conn or ip inbound[%s]", user, metadata.Inbound)
 		_ = conn.Close()
 		return conn
 	}
@@ -87,7 +87,7 @@ func (t *trafficTracker) RoutedPacketConnection(_ context.Context, conn N.Packet
 	}
 	lim, reject := t.applyLimit(user, metadata.Inbound, sourceIP(metadata), false)
 	if reject {
-		log.Infof("Limited %s by conn or ip", user)
+		log.Infof("Limited %s by conn or ip inbound[%s]", user, metadata.Inbound)
 		_ = conn.Close()
 		return conn
 	}

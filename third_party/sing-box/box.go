@@ -65,6 +65,9 @@ type Options struct {
 	option.Options
 	Context                    context.Context
 	PlatformLogWriter          log.PlatformWriter
+	// DefaultLogWriter overrides stderr for console logs when Log.Output is empty.
+	// Used by v2node to prefix each node's logs with the panel inbound tag.
+	DefaultLogWriter           io.Writer
 	NetworkNamespaceHolderArgs []string
 }
 
@@ -170,6 +173,8 @@ func New(options Options) (*Box, error) {
 	var defaultLogWriter io.Writer
 	if platformInterface != nil {
 		defaultLogWriter = io.Discard
+	} else if options.DefaultLogWriter != nil {
+		defaultLogWriter = options.DefaultLogWriter
 	}
 	logFactory, err := log.New(log.Options{
 		Context:        ctx,

@@ -193,7 +193,9 @@ func isBenignNoiseMessage(message string) bool {
 		strings.Contains(message, "packet too short"),
 		strings.Contains(message, "invalid request"),
 		strings.Contains(message, "message authentication failed"),
-		strings.Contains(message, "report handshake success"):
+		strings.Contains(message, "report handshake success"),
+		strings.Contains(message, "SERVFAIL"),
+		strings.Contains(message, "use of closed network connection"):
 		return true
 	default:
 		return false

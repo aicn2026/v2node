@@ -99,6 +99,15 @@ func (m *ConnectionManager) TrackPacketConn(conn net.PacketConn) net.PacketConn 
 	}
 }
 
+// inboundLogSuffix appends inbound tag (contains panel node id, e.g. [host]-tuic:59)
+// so multi-node / multi-egress hosts can tell which node produced an outbound error.
+func inboundLogSuffix(metadata adapter.InboundContext) string {
+	if metadata.Inbound == "" {
+		return ""
+	}
+	return " inbound[" + metadata.Inbound + "]"
+}
+
 func (m *ConnectionManager) NewConnection(ctx context.Context, this N.Dialer, conn net.Conn, metadata adapter.InboundContext, onClose N.CloseHandlerFunc) {
 	ctx = adapter.WithContext(ctx, &metadata)
 	var (
@@ -121,7 +130,7 @@ func (m *ConnectionManager) NewConnection(ctx context.Context, this N.Dialer, co
 		if outbound, isOutbound := this.(adapter.Outbound); isOutbound {
 			dialerString = " using outbound/" + outbound.Type() + "[" + outbound.Tag() + "]"
 		}
-		err = E.Cause(err, "open connection to ", remoteString, dialerString)
+		err = E.Cause(err, "open connection to ", remoteString, dialerString, inboundLogSuffix(metadata))
 		m.deleteURLTestHistory(metadata.OutboundChain)
 		N.CloseOnHandshakeFailure(conn, onClose, err)
 		logOutboundError(m.logger, ctx, err)
@@ -197,7 +206,7 @@ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dial
 			if outbound, isOutbound := this.(adapter.Outbound); isOutbound {
 				dialerString = " using outbound/" + outbound.Type() + "[" + outbound.Tag() + "]"
 			}
-			err = E.Cause(err, "open packet connection to ", remoteString, dialerString)
+			err = E.Cause(err, "open packet connection to ", remoteString, dialerString, inboundLogSuffix(metadata))
 			m.deleteURLTestHistory(metadata.OutboundChain)
 			N.CloseOnHandshakeFailure(conn, onClose, err)
 			logOutboundError(m.logger, ctx, err)
@@ -221,7 +230,7 @@ func (m *ConnectionManager) NewPacketConnection(ctx context.Context, this N.Dial
 			if outbound, isOutbound := this.(adapter.Outbound); isOutbound {
 				dialerString = " using outbound/" + outbound.Type() + "[" + outbound.Tag() + "]"
 			}
-			err = E.Cause(err, "listen packet connection using ", dialerString)
+			err = E.Cause(err, "listen packet connection using ", dialerString, inboundLogSuffix(metadata))
 			m.deleteURLTestHistory(metadata.OutboundChain)
 			N.CloseOnHandshakeFailure(conn, onClose, err)
 			logOutboundError(m.logger, ctx, err)
@@ -467,9 +476,10 @@ func (c *trackedPacketConn) WriterReplaceable() bool {
 }
 
 // Outbound dial/DNS failures from user traffic are common noise.
+// Match Xray freedom behavior: these are LogInfo there, not Error.
 func logOutboundError(logger logger.ContextLogger, ctx context.Context, err error) {
 	if isBenignOutboundError(err) {
-		logger.DebugContext(ctx, err)
+		logger.InfoContext(ctx, err)
 		return
 	}
 	logger.ErrorContext(ctx, err)
@@ -486,6 +496,8 @@ func isBenignOutboundError(err error) bool {
 		strings.Contains(msg, "no such host"),
 		strings.Contains(msg, "empty result"),
 		strings.Contains(msg, "server misbehaving"),
+		strings.Contains(msg, "SERVFAIL"),
+		strings.Contains(msg, "use of closed network connection"),
 		strings.Contains(msg, "connection refused"),
 		strings.Contains(msg, "network is unreachable"),
 		strings.Contains(msg, "no route to host"),
