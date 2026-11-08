@@ -1,24 +1,24 @@
-﻿# v2node
+# v2node
 A V2board backend based on embedded sing-box (panel API unchanged).
-一个基于嵌入式 sing-box 数据面的 V2board 节点服务端（面板对接不变）。
-支持协议：VLESS Reality、TUIC、Hysteria2、Shadowsocks。
+һ������Ƕ��ʽ sing-box ������� V2board �ڵ����ˣ����ԽӲ��䣩��
+֧��Э�飺VLESS Reality��TUIC��Hysteria2��Shadowsocks��
 
-**注意： 本项目需要搭配[修改版V2board](https://github.com/wyx2685/v2board)**
+**ע�⣺ ����Ŀ��Ҫ����[�޸İ�V2board](https://github.com/wyx2685/v2board)**
 
-## 软件安装
+## �����װ
 
-### 一键安装
+### һ����װ
 
 ```
-# 单节点
-wget -N https://raw.githubusercontent.com/mouren1988/v2node/feat/singbox-dataplane/script/install.sh && bash install.sh --api-host https://example.com --api-key YOUR_KEY --node-id 1
+# ���ڵ�
+wget -N https://raw.githubusercontent.com/aicn2026/v2node/feat/singbox-dataplane/script/install.sh && bash install.sh --api-host https://example.com --api-key YOUR_KEY --node-id 1
 
-# 多节点（同一面板/密钥，多个 NodeID）
-wget -N https://raw.githubusercontent.com/mouren1988/v2node/feat/singbox-dataplane/script/install.sh && bash install.sh --api-host https://example.com --api-key YOUR_KEY --node-id 1,2,3
+# ��ڵ㣨ͬһ���/��Կ����� NodeID��
+wget -N https://raw.githubusercontent.com/aicn2026/v2node/feat/singbox-dataplane/script/install.sh && bash install.sh --api-host https://example.com --api-key YOUR_KEY --node-id 1,2,3
 ```
 
-## 构建
+## ����
 ``` bash
-# Linux 节点二进制（Reality 需要 with_utls，TUIC 需要 with_quic）
+# Linux �ڵ�����ƣ�Reality ��Ҫ with_utls��TUIC ��Ҫ with_quic��
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -tags "with_quic,with_utls" -trimpath -ldflags "-s -w -buildid=" -o v2node-linux-amd64 .
 ```
