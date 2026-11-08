@@ -1,4 +1,5 @@
 #!/bin/bash
+# raw utf-8 (do not edit with non-UTF8 tools)
 
 red='\033[0;31m'
 green='\033[0;32m'
