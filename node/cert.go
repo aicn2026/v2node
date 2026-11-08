@@ -17,6 +17,7 @@ import (
 )
 
 func (c *Controller) renewCertTask(_ context.Context) error {
+	// ACME/lego 默认未编入；启用 -tags acme 后此任务才会被 startTasks 挂上。
 	l, err := NewLego(c.info.Common.CertInfo)
 	if err != nil {
 		log.WithField("tag", c.tag).Info("new lego error: ", err)
@@ -39,20 +40,23 @@ func (c *Controller) requestCert() error {
 			return fmt.Errorf("cert file path or key file path not exist")
 		}
 	case "dns", "http":
-		if cert.CertFile == "" || cert.KeyFile == "" {
-			return fmt.Errorf("cert file path or key file path not exist")
-		}
-		if file.IsExist(cert.CertFile) && file.IsExist(cert.KeyFile) {
-			return nil
-		}
-		l, err := NewLego(cert)
-		if err != nil {
-			return fmt.Errorf("create lego object error: %s", err)
-		}
-		err = l.CreateCert()
-		if err != nil {
-			return fmt.Errorf("create lego cert error: %s", err)
-		}
+		// ACME/lego 默认未编入（见 lego.go 的 //go:build acme）。
+		// 恢复自动申请：go build -tags acme，并改回下方调用。
+		// if cert.CertFile == "" || cert.KeyFile == "" {
+		// 	return fmt.Errorf("cert file path or key file path not exist")
+		// }
+		// if file.IsExist(cert.CertFile) && file.IsExist(cert.KeyFile) {
+		// 	return nil
+		// }
+		// l, err := NewLego(cert)
+		// if err != nil {
+		// 	return fmt.Errorf("create lego object error: %s", err)
+		// }
+		// err = l.CreateCert()
+		// if err != nil {
+		// 	return fmt.Errorf("create lego cert error: %s", err)
+		// }
+		return fmt.Errorf("cert_mode %s requires ACME build (-tags acme); use none/file/self/remote", cert.CertMode)
 	case "self":
 		if cert.CertFile == "" || cert.KeyFile == "" {
 			return fmt.Errorf("cert file path or key file path not exist")

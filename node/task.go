@@ -33,7 +33,8 @@ func (c *Controller) startTasks(node *panel.NodeInfo) {
 	_ = c.userReportPeriodic.Start(false)
 	if node.Security == panel.Tls {
 		switch c.info.Common.CertInfo.CertMode {
-		case "none", "", "file", "self", "remote":
+		case "none", "", "file", "self", "remote", "dns", "http":
+			// dns/http 续期依赖 ACME/lego，默认未编入；-tags acme 时把 dns/http 移出本 case 即可。
 		default:
 			c.renewCertPeriodic = &task.Task{
 				Name:     "renewCertTask",

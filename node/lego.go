@@ -1,3 +1,9 @@
+//go:build acme
+
+// ACME/lego (dns/http 自动申请证书) 默认不编入，以减小二进制体积。
+// 需要时用: go build -tags acme
+// 或恢复本文件顶部的 //go:build acme 限制。
+
 package node
 
 import (
