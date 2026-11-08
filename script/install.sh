@@ -8,7 +8,7 @@ plain='\033[0m'
 cur_dir=$(pwd)
 
 # check root
-[[ $EUID -ne 0 ]] && echo -e "${red}错误�?{plain} 必须使用root用户运行此脚本！\n" && exit 1
+[[ $EUID -ne 0 ]] && echo -e "${red}错误：${plain} 必须使用root用户运行此脚本！\n" && exit 1
 
 # check os
 if [[ -f /etc/redhat-release ]]; then
@@ -96,7 +96,7 @@ else
 fi
 
 if [ "$(getconf WORD_BIT)" != '32' ] && [ "$(getconf LONG_BIT)" != '64' ] ; then
-    echo "本软件不支持 32 位系�?x86)，请使用 64 位系�?x86_64)，如果检测有误，请联系作�?
+    echo "本软件不支持 32 位系统(x86)，请使用 64 位系统(x86_64)，如果检测有误，请联系作者"
     exit 2
 fi
 
@@ -110,18 +110,18 @@ fi
 
 if [[ x"${release}" == x"centos" ]]; then
     if [[ ${os_version} -le 6 ]]; then
-        echo -e "${red}请使�?CentOS 7 或更高版本的系统�?{plain}\n" && exit 1
+        echo -e "${red}请使用 CentOS 7 或更高版本的系统！${plain}\n" && exit 1
     fi
     if [[ ${os_version} -eq 7 ]]; then
-        echo -e "${red}注意�?CentOS 7 无法使用hysteria1/2协议�?{plain}\n"
+        echo -e "${red}注意： CentOS 7 无法使用hysteria1/2协议！${plain}\n"
     fi
 elif [[ x"${release}" == x"ubuntu" ]]; then
     if [[ ${os_version} -lt 16 ]]; then
-        echo -e "${red}请使�?Ubuntu 16 或更高版本的系统�?{plain}\n" && exit 1
+        echo -e "${red}请使用 Ubuntu 16 或更高版本的系统！${plain}\n" && exit 1
     fi
 elif [[ x"${release}" == x"debian" ]]; then
     if [[ ${os_version} -lt 8 ]]; then
-        echo -e "${red}请使�?Debian 8 或更高版本的系统�?{plain}\n" && exit 1
+        echo -e "${red}请使用 Debian 8 或更高版本的系统！${plain}\n" && exit 1
     fi
 fi
 
@@ -189,7 +189,7 @@ install_base() {
     if [[ x"${release}" == x"centos" ]]; then
         # 检查并安装 epel-release
         if ! rpm -q epel-release >/dev/null 2>&1; then
-            echo "安装 EPEL �?.."
+            echo "安装 EPEL 源..."
             yum install -y epel-release >/dev/null 2>&1
         fi
         need_install_yum wget curl unzip tar cronie socat ca-certificates pv
@@ -206,7 +206,8 @@ install_base() {
     elif [[ x"${release}" == x"arch" ]]; then
         echo "更新包数据库..."
         pacman -Sy --noconfirm >/dev/null 2>&1
-        # --needed 会跳过已安装的包，非常高�?        echo "安装必需的包..."
+        # --needed 会跳过已安装的包，非常高效
+        echo "安装必需的包..."
         pacman -S --noconfirm --needed wget curl unzip tar cronie socat ca-certificates pv >/dev/null 2>&1
     fi
 }
@@ -275,7 +276,7 @@ ${nodes_json}
     ]
 }
 EOF
-        echo -e "${green}V2node 配置文件生成完成�?{#node_ids[@]} 个节点）,正在重新启动服务${plain}"
+        echo -e "${green}V2node 配置文件生成完成（${#node_ids[@]} 个节点）,正在重新启动服务${plain}"
         if [[ x"${release}" == x"alpine" ]]; then
             service v2node restart
         else
@@ -303,14 +304,14 @@ install_v2node() {
     if  [[ -z "$version_param" ]] ; then
         last_version=$(curl -Ls "https://api.github.com/repos/aicn2026/v2node/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
         if [[ ! -n "$last_version" ]]; then
-            echo -e "${red}检�?v2node 版本失败，可能是超出 Github API 限制，请稍后再试，或手动指定 v2node 版本安装${plain}"
+            echo -e "${red}检测 v2node 版本失败，可能是超出 Github API 限制，请稍后再试，或手动指定 v2node 版本安装${plain}"
             exit 1
         fi
-        echo -e "${green}检测到最新版本：${last_version}，开始安�?..${plain}"
+        echo -e "${green}检测到最新版本：${last_version}，开始安装...${plain}"
         url="https://github.com/aicn2026/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
         curl -sL "$url" | pv -s 30M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
         if [[ $? -ne 0 ]]; then
-            echo -e "${red}下载 v2node 失败，请确保你的服务器能够下�?Github 的文�?{plain}"
+            echo -e "${red}下载 v2node 失败，请确保你的服务器能够下载 Github 的文件${plain}"
             exit 1
         fi
     else
@@ -318,7 +319,7 @@ install_v2node() {
         url="https://github.com/aicn2026/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
         curl -sL "$url" | pv -s 30M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
         if [[ $? -ne 0 ]]; then
-            echo -e "${red}下载 v2node $1 失败，请确保此版本存�?{plain}"
+            echo -e "${red}下载 v2node $1 失败，请确保此版本存在${plain}"
             exit 1
         fi
     fi
@@ -350,7 +351,7 @@ depend() {
 EOF
         chmod +x /etc/init.d/v2node
         rc-update add v2node default
-        echo -e "${green}v2node ${last_version}${plain} 安装完成，已设置开机自�?
+        echo -e "${green}v2node ${last_version}${plain} 安装完成，已设置开机自启"
     else
         rm /etc/systemd/system/v2node.service -f
         cat <<EOF > /etc/systemd/system/v2node.service
@@ -378,14 +379,14 @@ EOF
         systemctl daemon-reload
         systemctl stop v2node
         systemctl enable v2node
-        echo -e "${green}v2node ${last_version}${plain} 安装完成，已设置开机自�?
+        echo -e "${green}v2node ${last_version}${plain} 安装完成，已设置开机自启"
     fi
 
     if [[ ! -f /etc/v2node/config.json ]]; then
         # 如果通过 CLI 传入了完整参数，则直接生成配置并跳过交互
         if [[ -n "$API_HOST_ARG" && ${#NODE_IDS_ARG[@]} -gt 0 && -n "$API_KEY_ARG" ]]; then
             generate_v2node_config "$API_HOST_ARG" "$API_KEY_ARG" "${NODE_IDS_ARG[@]}"
-            echo -e "${green}已根据参数生�?/etc/v2node/config.json${plain}"
+            echo -e "${green}已根据参数生成 /etc/v2node/config.json${plain}"
             first_install=false
         else
             cp config.json /etc/v2node/
@@ -421,9 +422,9 @@ EOF
     echo "v2node start        - 启动 v2node"
     echo "v2node stop         - 停止 v2node"
     echo "v2node restart      - 重启 v2node"
-    echo "v2node status       - 查看 v2node 状�?
-    echo "v2node enable       - 设置 v2node 开机自�?
-    echo "v2node disable      - 取消 v2node 开机自�?
+    echo "v2node status       - 查看 v2node 状态"
+    echo "v2node enable       - 设置 v2node 开机自启"
+    echo "v2node disable      - 取消 v2node 开机自启"
     echo "v2node log          - 查看 v2node 日志"
     echo "v2node generate     - 生成 v2node 配置文件"
     echo "v2node update       - 更新 v2node"
@@ -434,11 +435,12 @@ EOF
     echo "------------------------------------------"
 
     if [[ $first_install == true ]]; then
-        read -rp "检测到你为第一次安�?v2node，是否自动生�?/etc/v2node/config.json�?y/n): " if_generate
+        read -rp "检测到你为第一次安装 v2node，是否自动生成 /etc/v2node/config.json？(y/n): " if_generate
         if [[ "$if_generate" =~ ^[Yy]$ ]]; then
-            # 交互式收集参数，提供示例默认�?            read -rp "面板API地址[格式: https://example.com/]: " api_host
+            # 交互式收集参数，提供示例默认值
+            read -rp "面板API地址[格式: https://example.com/]: " api_host
             api_host=${api_host:-https://example.com/}
-            read -rp "节点ID(多个用逗号分隔, �?59,60,62): " node_id
+            read -rp "节点ID(多个用逗号分隔, 如 59,60,62): " node_id
             node_id=${node_id:-1}
             read -rp "节点通讯密钥: " api_key
             NODE_IDS_ARG=()
@@ -453,6 +455,6 @@ EOF
 }
 
 parse_args "$@"
-echo -e "${green}开始安�?{plain}"
+echo -e "${green}开始安装${plain}"
 install_base
 install_v2node "$VERSION_ARG"
