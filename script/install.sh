@@ -310,7 +310,7 @@ install_v2node() {
         fi
         echo -e "${green}检测到最新版本：${last_version}，开始安装...${plain}"
         url="https://github.com/aicn2026/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
-        curl -sL "$url" | pv -s 30M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
+        curl -sL "$url" | pv -s 12M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 v2node 失败，请确保你的服务器能够下载 Github 的文件${plain}"
             exit 1
@@ -318,7 +318,7 @@ install_v2node() {
     else
         last_version="v${version_param#v}"
         url="https://github.com/aicn2026/v2node/releases/download/${last_version}/v2node-linux-${arch}.zip"
-        curl -sL "$url" | pv -s 30M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
+        curl -sL "$url" | pv -s 12M -W -N "下载进度" > /usr/local/v2node/v2node-linux.zip
         if [[ $? -ne 0 ]]; then
             echo -e "${red}下载 v2node $1 失败，请确保此版本存在${plain}"
             exit 1
@@ -329,8 +329,6 @@ install_v2node() {
     rm v2node-linux.zip -f
     chmod +x v2node
     mkdir /etc/v2node/ -p
-    cp geoip.dat /etc/v2node/
-    cp geosite.dat /etc/v2node/
     if [[ x"${release}" == x"alpine" ]]; then
         rm /etc/init.d/v2node -f
         cat <<EOF > /etc/init.d/v2node
