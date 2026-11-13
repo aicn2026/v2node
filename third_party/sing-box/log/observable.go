@@ -195,7 +195,13 @@ func isBenignNoiseMessage(message string) bool {
 		strings.Contains(message, "message authentication failed"),
 		strings.Contains(message, "report handshake success"),
 		strings.Contains(message, "SERVFAIL"),
-		strings.Contains(message, "use of closed network connection"):
+		strings.Contains(message, "use of closed network connection"),
+		// TUIC client probe / stale-subscription / path noise (not server faults).
+		strings.Contains(message, "authentication timeout"),
+		strings.Contains(message, "authentication: unknown user"),
+		strings.Contains(message, "authentication: token mismatch"),
+		strings.Contains(message, "Application error 0x0"),
+		strings.Contains(message, "no recent network activity"):
 		return true
 	default:
 		return false
